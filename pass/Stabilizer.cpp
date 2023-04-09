@@ -417,18 +417,8 @@ struct StabilizerPass : public ModulePass {
         ReturnInst::Create(m.getContext(), dummy_block);
 
         // Ensure the dummy is placed immediately after our function
-        // if(f.getNextNode() == NULL) {
-        if (f.getIterator() == m.getFunctionList().end()) {
-            // m.getFunctionList().setNext(&f, next);
-            m.getFunctionList().insertAfter(f.getIterator(), next);
-            m.getFunctionList().addNodeToList(next);
-        } else {
-            // m.getFunctionList().setNext(next, f.getNextNode());
-            m.getFunctionList().insertAfter(next->getIterator(), &*std::next(f.getIterator()));
-            // m.getFunctionList().setNext(&f, next);
-            m.getFunctionList().insertAfter(f.getIterator(), next);
-            m.getFunctionList().addNodeToList(next);
-        }
+        m.getFunctionList().insertAfter(f.getIterator(), next);
+        m.getFunctionList().addNodeToList(next);
 
         // Remove stack protection (creates implicit global references)
         f.removeFnAttr(Attribute::StackProtect);
