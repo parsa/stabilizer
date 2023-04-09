@@ -1,9 +1,10 @@
 #include <set>
 #include <vector>
-#include <math.h>
+#include <cmath>
 #include <signal.h>
-#include <stdlib.h>
+#include <cstdlib>
 #include <execinfo.h>
+#include <sys/time.h>
 
 #include "Function.h"
 #include "FunctionLocation.h"
@@ -12,7 +13,7 @@
 #include "Context.h"
 
 using namespace std;
- 
+
 extern "C" int stabilizer_main(int argc, char **argv);
 
 int main(int argc, char** argv);
@@ -39,7 +40,7 @@ void** topFrame = NULL;
 /**
  * Entry point for a program run with Stabilizer.  The program's existing
  * main function has been renamed 'stabilizer_main' by the compiler pass.
- * 
+ *
  * 1. Save the current top of the stack
  * 2. Set signal handlers for debug traps, timers, and segfaults for error handling
  * 3. Place a trap instruction at the start of each randomizable function to trigger relocation on-demand
@@ -49,37 +50,37 @@ void** topFrame = NULL;
  */
 int main(int argc, char **argv) {
     DEBUG("Initializing Stabilizer");
-    
+
     topFrame = (void**)__builtin_frame_address(0);
     DEBUG("Stack top is at %p", topFrame);
-    
+
     // Register signal handlers
     setHandler(Trap::TrapSignal, onTrap);
     setHandler(SIGALRM, onTimer);
     setHandler(SIGSEGV, onFault);
     DEBUG("Signal handlers installed");
-    
+
     // Lazily relocate functions
     for(set<Function*>::iterator iter = functions.begin(); iter != functions.end(); iter++) {
         Function* f = *iter;
         f->setTrap();
     }
     DEBUG("Trapped all functions");
-    
+
     // Set the re-randomization timer
     setTimer(interval);
     DEBUG("Set re-randomization timer");
-    
+
     // Call all constructors
     for(vector<ctor_t>::iterator i = constructors.begin(); i != constructors.end(); i++) {
         (*i)();
     }
     DEBUG("Finished with program constructors");
-    
+
     // Call the old main function
     int r = stabilizer_main(argc, argv);
     DEBUG("Shutting down");
-    
+
     return r;
 }
 
@@ -92,7 +93,7 @@ extern "C" {
     void stabilizer_register_constructor(ctor_t ctor) {
         constructors.push_back(ctor);
     }
-    
+
     void stabilizer_register_stack_pad(uint8_t* pad) {
         stack_pads.insert(pad);
     }
@@ -100,7 +101,7 @@ extern "C" {
     void* stabilizer_malloc(size_t sz) {
         return getDataHeap()->malloc(sz);
     }
-    
+
     void* stabilizer_calloc(size_t n, size_t sz) {
         return getDataHeap()->calloc(n, sz);
     }
@@ -131,28 +132,28 @@ void onTrap(int sig, siginfo_t* info, void* p) {
     // Extract the trapped function (stored next to the trap instruction)
     FunctionHeader* h = (FunctionHeader*)c.ip();
     Function* f = h->getFunction();
-    
+
     // If the trap was placed to trigger a re-randomization
     if(rerandomizing) {
         DEBUG("Re-randomization started after trap on %p", c.ip());
         live_functions.empty();
-        
+
         // Mark all on-stack function locations as used
         Stack s = c.stack();
         while(s.fp() != topFrame) {
             FunctionLocation::mark(s.ret());
             s++;
         }
-        
+
         // Mark the current instruction pointer as used
         FunctionLocation::mark((void*)c.ip());
-        
+
         // Mark the top return address on the stack as used
         FunctionLocation::mark(*(void**)c.sp());
-        
+
         // Collect unused function locations
         FunctionLocation::sweep();
-        
+
         rerandomizing = false;
         setTimer(interval);
     }
@@ -160,7 +161,7 @@ void onTrap(int sig, siginfo_t* info, void* p) {
     // Relocate the function
     FunctionLocation* oldLocation = f->relocate();
     live_functions.insert(f);
-    
+
     if(oldLocation != NULL) {
         oldLocation->release();
     }
@@ -172,16 +173,16 @@ void onTimer(int sig, siginfo_t* info, void* p) {
     Context c(p);
 
     DEBUG("Re-randomization timer fired at %p", c.ip());
-    
+
     if(functions.size() == 0) {
         DEBUG("Re-randomizing stack pads");
         for(set<uint8_t*>::iterator iter = stack_pads.begin(); iter != stack_pads.end(); iter++) {
             uint8_t* pad = *iter;
-			**iter = getRandomByte();
+            **iter = getRandomByte();
         }
-        
+
         setTimer(interval);
-        
+
     } else {
         DEBUG("Placing traps");
         for(set<Function*>::iterator iter = live_functions.begin(); iter != live_functions.end(); iter++) {
@@ -192,10 +193,10 @@ void onTimer(int sig, siginfo_t* info, void* p) {
             }
             f->setTrap();
         }
-        
+
         live_functions.clear();
     }
-    
+
     rerandomizing = true;
 }
 
@@ -211,7 +212,7 @@ void setTimer(int msec) {
     timer.it_value.tv_usec = 1000 * (msec % 1000);
     timer.it_interval.tv_sec = 0;
     timer.it_interval.tv_usec = 0;
-    
+
     setitimer(ITIMER_REAL, &timer, 0);
 }
 

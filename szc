@@ -1,12 +1,60 @@
 #!/usr/bin/env python
 
 import os
+import stat
+import subprocess
 import sys
 import random
 import argparse
+import logging
 from distutils import util
 
-parser = argparse.ArgumentParser(description="Stabilizer Compiler Driver")
+
+# region Auditing {{{
+def audit(event, event_args):
+	if event == 'subprocess.Popen':
+		executable, sp_args, cwd, env = event_args
+		logging.debug(f"+ {cwd or ''}$ {' '.join((str(i) for i in sp_args))}")
+	elif event == 'urllib.Request':
+		fullurl, data, headers, method = event_args
+		logging.debug(f'- {method} {fullurl}')
+	elif event == 'shutil.unpack_archive':
+		filename, extract_dir, fileformat = event_args
+		logging.debug(f'- unpack_archive {filename=}, {extract_dir=}, {format=}')
+	elif event == 'shutil.rmtree':
+		path = event_args[0]
+		logging.debug(f'- rmtree {path}')
+	elif event == 'open':
+		path, mode, flags = event_args
+		if isinstance(path, int) or (isinstance(path, str) and path.endswith('.pyc')):
+			return
+		fmod = stat.filemode(flags)
+		logging.debug(f'- open {path=} {mode=} {fmod=} ({flags:o})')
+	elif event == 'os.chdir':
+		path = event_args[0]
+		logging.debug(f'- chdir {path}')
+	elif event == 'os.mkdir':
+		path, mode, dir_fd = event_args
+		logging.debug(f'- mkdir {path=} {mode=} {dir_fd=}')
+	elif event == 'os.rename':
+		src, dst, src_dir_fd, dst_dir_fd = event_args
+		logging.debug(f'- rename {src=} {dst=} {src_dir_fd=} {dst_dir_fd=}')
+	elif event == 'os.chown':
+		path, uid, gid, dir_fd = event_args
+		logging.debug(f'- chown {path=} {uid=} {gid=} {dir_fd=}')
+
+
+logging.basicConfig(
+	format='%(asctime)s %(levelname)s %(message)s',
+	level=logging.DEBUG,
+	datefmt='%Y-%m-%d %H:%M:%S',
+)
+
+sys.addaudithook(audit)
+# endregion }}}
+
+
+parser = argparse.ArgumentParser(description='Stabilizer Compiler Driver')
 
 # Which randomizations should be run
 parser.add_argument('-R', action='append', choices=['code', 'heap', 'stack', 'link'], default=[])
@@ -38,21 +86,21 @@ def getPlatform():
 	elif util.get_platform().startswith('linux'):
 		return 'linux'
 	else:
-		print 'Unsupported platform'
+		print('Unsupported platform')
 		exit(2)
 
 def arg(flag, values):
 	if not isinstance(values, list):
 		values = [values]
-	
+
 	cmd = ''
 	for v in values:
 		if v == True:
-			cmd += ' -'+flag
+			cmd += ' -' + flag
 		elif v == False:
 			pass
 		else:
-			cmd += ' -'+flag+v
+			cmd += ' -' + flag + v
 	return cmd
 
 if args.platform == 'auto':
@@ -69,7 +117,7 @@ else:
 opts = []
 
 args.l.append('stdc++')
-#args.v = True
+# args.v = True
 
 if 'code' in args.R:
 	opts.append('lower-intrinsics')
@@ -91,41 +139,41 @@ if 'code' in args.R or 'heap' in args.R or 'stack' in args.R:
 def compile(input):
 	if input.endswith('.o'):
 		return input
-	
+
 	needsAssembly = False
-	
+
 	if args.lang == 'fortran':
 		cmd = 'gfortran -O0 -fplugin=dragonegg -S -fplugin-arg-dragonegg-emit-ir'
-		cmd += arg('o ', args.o+'.s')
+		cmd += arg('o ', args.o + '.s')
 		needsAssembly = True
-		
+
 	elif args.frontend == 'gcc':
 		cmd = 'gcc -O0 -fplugin=dragonegg -S -fplugin-arg-dragonegg-emit-ir'
-		cmd += arg('o ', args.o+'.s')
+		cmd += arg('o ', args.o + '.s')
 		needsAssembly = True
-	
+
 	else:
 		cmd = 'clang -O0 -c -emit-llvm'
 		cmd += arg('o ', args.o)
-	
+
 	cmd += arg('O', 0)
 	cmd += arg('g', args.g)
 	cmd += arg('I', args.I)
 	cmd += arg('f', args.f)
 	cmd += arg('D', args.D)
-	
-	cmd += ' '+input
-	
+
+	cmd += ' ' + input
+
 	if args.v:
-		print cmd
-	os.system(cmd)
-	
+		print(cmd)
+	subprocess.check_call(cmd, shell=True)
+
 	if needsAssembly:
 		cmd = 'llvm-as -o ' + args.o + ' ' + args.o + '.s'
 		if args.v:
-			print cmd
-		os.system(cmd)
-	
+			print(cmd)
+		subprocess.check_call(cmd, shell=True)
+
 	return args.o
 
 def link(inputs):
@@ -137,55 +185,60 @@ def link(inputs):
 	cmd += ' '.join(inputs)
 
 	if args.v:
-		print cmd
-	os.system(cmd)
+		print(cmd)
+	subprocess.check_call(cmd, shell=True)
 	return args.o + '.bc'
 
 def transform(input):
 	cmd = 'opt -o ' + args.o + '.opt.bc'
 	cmd += ' ' + input
-	
+
+	cmd += ' -load=' + STABILIZER_HOME + '/LLVMStabilizer.' + LIBSUFFIX
+
+	# cmd += arg('', opts)
+	cmd += ' -passes=\''
+
 	if args.O > 0:
-		cmd += ' -O'+str(args.O)
-	
-	cmd += ' -load='+STABILIZER_HOME+'/LLVMStabilizer.'+LIBSUFFIX
-	
-	cmd += arg('', opts)
-	
+		cmd += 'default<O' + str(args.O) + '>,'
+
+	cmd += ','.join(opts) + '\''
+	print(opts)
+
 	if args.v:
-		print cmd
-	os.system(cmd)
+		print(cmd)
+	subprocess.check_call(cmd, shell=True)
 	return args.o + '.opt.bc'
 
 def codegen(input):
-	cmd = 'llc -O0 -relocation-model=pic -disable-fp-elim'
+	# cmd = 'llc -O0 -relocation-model=pic -disable-fp-elim'
+	cmd = 'llc -O0 -relocation-model=pic --frame-pointer=all'
 	cmd += ' -o ' + args.o + '.s'
 	cmd += ' ' + input
-	
+
 	if args.v:
-		print cmd
-	os.system(cmd)
-	
+		print(cmd)
+	subprocess.check_call(cmd, shell=True)
+
 	if args.lang == 'fortran':
 		cmd = 'gfortran'
 	else:
 		cmd = args.frontend
-	
+
 	cmd += ' ' + args.o + '.s'
-	
+
 	cmd += arg('o ', args.o)
 	cmd += arg('f', args.f)
 	cmd += arg('L', args.L)
 	cmd += arg('l', args.l)
-	
+
 	if args.v:
-		print cmd
-	os.system(cmd)
-	
+		print(cmd)
+	subprocess.check_call(cmd, shell=True)
+
 	return args.o
 
 # Build up program arguments
-object_files = map(compile, args.input)
+object_files = list(map(compile, args.input))
 
 if not args.c:
 	linked = link(object_files)
