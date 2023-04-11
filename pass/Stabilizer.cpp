@@ -8,7 +8,6 @@
 
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/CommandLine.h>
-// #include <llvm/Support/TypeBuilder.h>
 
 #include <map>
 #include <set>
@@ -917,8 +916,7 @@ struct StabilizerPass : public ModulePass {
 
         // Declare the register_constructor runtime function
         registerConstructor = Function::Create(
-            // TypeBuilder<void(void()), true>::get(m.getContext()),
-            FunctionType::get(Type::getVoidTy(m.getContext()), {Type::getVoidTy(m.getContext())}, true),
+            FunctionType::get(Type::getVoidTy(m.getContext()), {}, false),
             Function::ExternalLinkage,
             "stabilizer_register_constructor",
             &m
