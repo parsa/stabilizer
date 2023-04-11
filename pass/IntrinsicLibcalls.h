@@ -11,12 +11,11 @@
 #include <map>
 #include <set>
 
-using namespace std;
 using namespace llvm;
 
-map<StringRef, StringRef> libcall_map;
+std::map<StringRef, StringRef> libcall_map;
 
-set<StringRef> inlined;
+std::set<StringRef> inlined;
 
 void InitLibcalls() {
     inlined.insert("llvm.va_start");
@@ -116,7 +115,7 @@ bool isAlwaysInlined(StringRef intrinsic) {
 
 StringRef GetLibcall(StringRef intrinsic) {
     return libcall_map[intrinsic];
-    map<StringRef, StringRef>::iterator i = libcall_map.find(intrinsic);
+    std::map<StringRef, StringRef>::iterator i = libcall_map.find(intrinsic);
     if(i == libcall_map.end()) {
         return "";
     } else {

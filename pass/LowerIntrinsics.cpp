@@ -15,15 +15,14 @@
 
 #include "IntrinsicLibcalls.h"
 
-using namespace std;
 using namespace llvm;
 
 
-bool runOnModule(Module &m)
+bool lowerInstrinsicsPass(Module &m)
 {
     InitLibcalls();
 
-    set<Function*> toDelete;
+    std::set<Function*> toDelete;
 
     for(Module::iterator fun = m.begin(); fun != m.end(); fun++) {
         llvm::Function &f = *fun;
@@ -49,21 +48,12 @@ bool runOnModule(Module &m)
         }
     }
 
-    for(set<Function*>::iterator iter = toDelete.begin(); iter != toDelete.end(); iter++) {
+    for(std::set<Function*>::iterator iter = toDelete.begin(); iter != toDelete.end(); iter++) {
         (*iter)->eraseFromParent();
     }
 
     return true;
 }
-
-struct LowerIntrinsics: public PassInfoMixin<LowerIntrinsics> {
-    PreservedAnalyses run(Module &m, ModuleAnalysisManager &mam) {
-        runOnModule(m);
-        return PreservedAnalyses::none();
-    }
-
-    static bool isRequired() { return true; }
-};
 
 struct LowerIntrinsicsLegacy : public ModulePass
 {
@@ -76,37 +66,9 @@ struct LowerIntrinsicsLegacy : public ModulePass
 
     virtual bool runOnModule(Module& m)
     {
-        return ::runOnModule(m);
+        return ::lowerInstrinsicsPass(m);
     }
 };
-
-// -----------------------------------------------------------------------------
-// New Pass Manager Registration
-// -----------------------------------------------------------------------------
-namespace {
-    bool registerLowerIntrinsicsCallback(StringRef Name, ModulePassManager& MPM,
-        ArrayRef<PassBuilder::PipelineElement>)
-    {
-        if (Name == "lower-intrinsics")
-        {
-            MPM.addPass(LowerIntrinsics());
-            return true;
-        }
-        return false;
-    }
-
-    void registerPipelineParsingCallback(PassBuilder& PB)
-    {
-        PB.registerPipelineParsingCallback(registerLowerIntrinsicsCallback);
-    }
-}    // namespace
-
-extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
-llvmGetPassPluginInfo()
-{
-    return {LLVM_PLUGIN_API_VERSION, "LowerIntrinsics", LLVM_VERSION_STRING,
-        registerPipelineParsingCallback};
-}
 
 // -----------------------------------------------------------------------------
 // Legacy Pass Manager Registration
