@@ -63,7 +63,7 @@ parser.add_argument('-R', action='append', choices=['code', 'heap', 'stack', 'li
 parser.add_argument('-v', action='store_true')
 parser.add_argument('-lang', choices=['c', 'c++', 'fortran'])
 parser.add_argument('-platform', choices=['auto', 'linux', 'osx'], default='auto')
-parser.add_argument('-frontend', choices=['gcc', 'clang'], default='gcc')
+parser.add_argument('-frontend', choices=['gcc', 'clang'], default='clang')
 
 # Compiler pass-through arguments
 parser.add_argument('-c', action='store_true')
@@ -79,6 +79,17 @@ parser.add_argument('input', nargs='+')
 
 # Do the parse
 args = parser.parse_args()
+
+
+# Complain that the GCC frontend is broken and we can't use it, then exit
+def gcc_implementation_broken():
+	print('GCC frontend is broken, please use clang')
+	exit(1)
+
+
+if args.frontend == 'gcc' or args.lang == 'fortran':
+	gcc_implementation_broken()
+
 
 def getPlatform():
 	if util.get_platform().startswith('macosx'):
@@ -115,26 +126,28 @@ else:
 	LIBSUFFIX = 'so'
 
 opts = []
+passes = []
+stabilize_opts = []
 
 args.l.append('stdc++')
 # args.v = True
 
 if 'code' in args.R:
-	opts.append('lower-intrinsics')
-	opts.append('lowerswitch')
-	opts.append('lowerinvoke')
-	opts.append('stabilize-code')
+	passes.append('lower-intrinsics')
+	passes.append('lowerswitch')
+	passes.append('lowerinvoke')
+	stabilize_opts.append('stabilize-code')
 
 if 'stack' in args.R:
-	opts.append('stabilize-stack')
+	stabilize_opts.append('stabilize-stack')
 
 if 'heap' in args.R:
-	opts.append('stabilize-heap')
+	stabilize_opts.append('stabilize-heap')
 
 if 'code' in args.R or 'heap' in args.R or 'stack' in args.R:
 	args.L.append(STABILIZER_HOME)
 	args.l.append('stabilizer')
-	opts.append('stabilize')
+	passes.append('stabilize')
 
 def compile(input):
 	if input.endswith('.o'):
@@ -193,16 +206,18 @@ def transform(input):
 	cmd = 'opt -o ' + args.o + '.opt.bc'
 	cmd += ' ' + input
 
-	cmd += ' -load=' + STABILIZER_HOME + '/LLVMStabilizer.' + LIBSUFFIX
+	cmd += ' --load-pass-plugin=' + STABILIZER_HOME + '/LLVMStabilizer.' + LIBSUFFIX
 
-	# cmd += arg('', opts)
 	cmd += ' -passes=\''
 
 	if args.O > 0:
 		cmd += 'default<O' + str(args.O) + '>,'
 
-	cmd += ','.join(opts) + '\''
-	print(opts)
+	# cmd += arg('', opts)
+	cmd += ','.join(passes)
+	cmd +=  '\''
+
+	cmd += ' '.join([' -' + v + '=true' for v in stabilize_opts])
 
 	if args.v:
 		print(cmd)
