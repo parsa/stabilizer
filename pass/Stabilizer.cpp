@@ -879,13 +879,16 @@ struct StabilizerImpl {
      */
     void declareRuntimeFunctions(Module& m) {
         // Declare the register_function runtime function
+        // void stabilizer_register_function(
+        //    void* codeBase, void* codeLimit, void* tableBase, size_t tableSize,
+        //    bool adjacent, uint8_t* stackPad)
         vector<Type*> register_function_params;
         register_function_params.push_back(Type::getInt8PtrTy(m.getContext()));
         register_function_params.push_back(Type::getInt8PtrTy(m.getContext()));
         register_function_params.push_back(Type::getInt8PtrTy(m.getContext()));
         register_function_params.push_back(Type::getInt32Ty(m.getContext()));
         register_function_params.push_back(Type::getInt1Ty(m.getContext()));
-        register_function_params.push_back(PointerType::get(Type::getInt8Ty(m.getContext()), 0));
+        register_function_params.push_back(Type::getInt8PtrTy(m.getContext()));
 
         registerFunction = Function::Create(
              FunctionType::get(Type::getVoidTy(m.getContext()), register_function_params, false),
@@ -897,8 +900,10 @@ struct StabilizerImpl {
         registerFunction->addFnAttr(Attribute::NonLazyBind);
 
         // Declare the register_constructor runtime function
+        // void stabilizer_register_constructor(void* ctor)
         registerConstructor = Function::Create(
-            FunctionType::get(Type::getVoidTy(m.getContext()), {}, false),
+            FunctionType::get(Type::getVoidTy(m.getContext()),
+                {Type::getInt8PtrTy(m.getContext())}, false),
             Function::ExternalLinkage,
             "stabilizer_register_constructor",
             &m
@@ -907,11 +912,10 @@ struct StabilizerImpl {
         registerConstructor->addFnAttr(Attribute::NonLazyBind);
 
         // Declare the register_stack_table runtime function
-        vector<Type*> params;
-        params.push_back(PointerType::get(Type::getInt8Ty(m.getContext()), 0));
-
+        // void stabilizer_register_stack_pad(uint8_t* pad)
         registerStackPad = Function::Create(
-            FunctionType::get(Type::getVoidTy(m.getContext()), params, false),
+            FunctionType::get(Type::getVoidTy(m.getContext()),
+                {Type::getInt8PtrTy(m.getContext())}, false),
             Function::ExternalLinkage,
             "stabilizer_register_stack_pad",
             &m
