@@ -127,7 +127,7 @@ struct StabilizerImpl {
      * \arg m The module being transformed
      * \returns whether or not the module was modified (always true)
      */
-    bool operator()(Module &m) {
+    void operator()(Module &m) {
         // Replace calls to heap functions with Stabilizer's random heap
         if(stabilize_heap) {
             randomizeHeap(m);
@@ -135,7 +135,7 @@ struct StabilizerImpl {
 
         // Build a set of locally-defined functions
         set<Function*> local_functions;
-        for(llvm::Function& f : m)
+        for(Function& f : m)
         {
             if(!f.isIntrinsic()
                 && !f.isDeclaration()
@@ -197,17 +197,17 @@ struct StabilizerImpl {
         }
 
         // Register each existing constructor with the stabilizer runtime
-        for(vector<Value*>::iterator ctor_iter = old_ctors.begin(); ctor_iter != old_ctors.end(); ctor_iter++) {
+        for(Value* ctor_iter : old_ctors) {
             vector<Value*> args;
-            args.push_back(*ctor_iter);
+            args.push_back(ctor_iter);
             CallInst::Create(registerConstructor, args, "", ctor_bb);
         }
 
         // If we're not randomizing code, declare the stack tables by themselves
         if(stabilize_stack && !stabilize_code) {
-            for(map<Function*, GlobalVariable*>::iterator iter = stackPads.begin(); iter != stackPads.end(); iter++) {
+            for(auto [func, pad] : stackPads) {
                 vector<Value*> args;
-                args.push_back(iter->second);
+                args.push_back(pad);
                 CallInst::Create(registerStackPad, args, "", ctor_bb);
             }
         }
@@ -218,8 +218,6 @@ struct StabilizerImpl {
         if(main != NULL) {
             main->setName("stabilizer_main");
         }
-
-        return true;
     }
 
     /**
@@ -411,7 +409,6 @@ struct StabilizerImpl {
 
         // Ensure the dummy is placed immediately after our function
         m.getFunctionList().insertAfter(f.getIterator(), next);
-        m.getFunctionList().addNodeToList(next);
 
         // Remove stack protection (creates implicit global references)
         f.removeFnAttr(Attribute::StackProtect);
@@ -495,7 +492,7 @@ struct StabilizerImpl {
                     indices.push_back(Constant::getIntegerValue(Type::getInt32Ty(m.getContext()), APInt(32, (uint64_t)index, false)));
 
                     Constant* slot = ConstantExpr::getGetElementPtr(
-                        actualRelocationTable->getType(),
+                        relocationTableType,
                         actualRelocationTable,
                         indices,
                         true    // Yes, it is in bounds
@@ -924,12 +921,12 @@ struct StabilizerImpl {
     }
 };
 
-struct Stabilizer : public PassInfoMixin<Stabilizer>
+struct Stabilizer : public llvm::PassInfoMixin<Stabilizer>
 {
-    PreservedAnalyses run(Module& M, ModuleAnalysisManager& MAM)
+    llvm::PreservedAnalyses run(llvm::Module& M, llvm::ModuleAnalysisManager&)
     {
         stabilizer(M);
-        return PreservedAnalyses::none();
+        return llvm::PreservedAnalyses::none();
     }
     static bool isRequired()
     {
@@ -940,16 +937,16 @@ private:
     StabilizerImpl stabilizer;
 };
 
-struct StabilizerLegacy : public ModulePass
+struct StabilizerLegacy : public llvm::ModulePass
 {
     static char ID;
 
     StabilizerLegacy()
-      : ModulePass(ID)
+      : llvm::ModulePass(ID)
     {
     }
 
-    bool runOnModule(llvm::Module& M)
+    bool runOnModule(llvm::Module& M) override
     {
         stabilizer(M);
         return true;
@@ -962,13 +959,13 @@ private:
 // -----------------------------------------------------------------------------
 // New Pass Manager Registration
 // -----------------------------------------------------------------------------
-bool lowerInstrinsicsPass(Module& m);
-struct LowerIntrinsics : public PassInfoMixin<LowerIntrinsics>
+bool lowerInstrinsicsPass(llvm::Module& m);
+struct LowerIntrinsics : public llvm::PassInfoMixin<LowerIntrinsics>
 {
-    PreservedAnalyses run(Module& m, ModuleAnalysisManager& mam)
+    llvm::PreservedAnalyses run(llvm::Module& m, llvm::ModuleAnalysisManager&)
     {
         lowerInstrinsicsPass(m);
-        return PreservedAnalyses::none();
+        return llvm::PreservedAnalyses::none();
     }
 
     static bool isRequired()
@@ -977,8 +974,9 @@ struct LowerIntrinsics : public PassInfoMixin<LowerIntrinsics>
     }
 };
 namespace {
-    bool registerLowerIntrinsicsCallback(StringRef Name, ModulePassManager& MPM,
-        ArrayRef<PassBuilder::PipelineElement>)
+    bool registerLowerIntrinsicsCallback(llvm::StringRef Name,
+        llvm::ModulePassManager& MPM,
+        llvm::ArrayRef<llvm::PassBuilder::PipelineElement>)
     {
         if (Name == "lower-intrinsics")
         {
@@ -988,8 +986,9 @@ namespace {
         return false;
     }
 
-    bool registerStabilizeCallback(StringRef Name, ModulePassManager& MPM,
-        ArrayRef<PassBuilder::PipelineElement>)
+    bool registerStabilizeCallback(llvm::StringRef Name,
+        llvm::ModulePassManager& MPM,
+        llvm::ArrayRef<llvm::PassBuilder::PipelineElement>)
     {
         if (Name == "stabilize")
         {
@@ -999,7 +998,7 @@ namespace {
         return false;
     }
 
-    void registerPipelineParsingCallback(PassBuilder& PB)
+    void registerPipelineParsingCallback(llvm::PassBuilder& PB)
     {
         PB.registerPipelineParsingCallback(registerLowerIntrinsicsCallback);
         PB.registerPipelineParsingCallback(registerStabilizeCallback);
@@ -1017,5 +1016,5 @@ llvmGetPassPluginInfo()
 // Legacy Pass Manager Registration
 // -----------------------------------------------------------------------------
 char StabilizerLegacy::ID = 0;
-static RegisterPass<StabilizerLegacy> X(
+static llvm::RegisterPass<StabilizerLegacy> X(
     "stabilize", "Add support for runtime randomization of program layout");
