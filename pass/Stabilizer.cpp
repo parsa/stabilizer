@@ -2,10 +2,10 @@
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/PassPlugin.h>
 
-#include <llvm/IR/Module.h>
 #include <llvm/IR/Constants.h>
-#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Intrinsics.h>
+#include <llvm/IR/Module.h>
 
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/CommandLine.h>
@@ -53,7 +53,7 @@ struct StabilizerImpl {
     Platform getPlatform(Module& m) {
         string triple = m.getTargetTriple();
 
-        // Convert the target-triple to lowercase using C++'s elegant, intuitive API
+        // Convert the target-triple to lowercase
         transform(triple.begin(), triple.end(), triple.begin(), ::tolower);
 
         if(triple.find("x86_64") != string::npos
@@ -238,8 +238,8 @@ struct StabilizerImpl {
                 ConstantArray* table = dyn_cast<ConstantArray>(initializer);
 
                 // Get each entry in the table
-                for(ConstantArray::op_iterator i = table->op_begin(); i != table->op_end(); i++) {
-                    ConstantStruct* entry = dyn_cast<ConstantStruct>(i->get());
+                for(Use& i : table->operands()) {
+                    ConstantStruct* entry = dyn_cast<ConstantStruct>(i.get());
                     Constant* f = entry->getOperand(1);
                     result.push_back(f);
                 }
@@ -336,12 +336,8 @@ struct StabilizerImpl {
         // Get all the callsites in this function
         vector<CallInst*> calls;
 
-        for(Function::iterator b_iter = f.begin(); b_iter != f.end(); b_iter++) {
-            BasicBlock& b = *b_iter;
-
-            for(BasicBlock::iterator i_iter = b.begin(); i_iter != b.end(); i_iter++) {
-                Instruction& i = *i_iter;
-
+        for(BasicBlock& b : f) {
+            for(Instruction& i : b) {
                 if(isa<CallInst>(&i)) {
                     CallInst* c = dyn_cast<CallInst>(&i);
                     calls.push_back(c);
@@ -352,9 +348,7 @@ struct StabilizerImpl {
         //////////////////////////////////
 
         // Pad the stack before each callsite
-
-        for(vector<CallInst*>::iterator c_iter = calls.begin(); c_iter != calls.end(); c_iter++) {
-            CallInst* c = *c_iter;
+        for(CallInst* c : calls) {
             Instruction* next = c->getNextNode();
 
             // Load the stack pad size and widen it to an intptr
@@ -431,19 +425,13 @@ struct StabilizerImpl {
         if(references.size() > 0) {
             // Build an ordered list of referenced constants
             vector<Constant*> referencedValues;
-            for(map<Constant*, set<Use*> >::iterator p_iter = references.begin();
-                p_iter != references.end(); p_iter++) {
-
-                pair<Constant*, set<Use*> > p = *p_iter;
+            for(auto& p : references) {
                 referencedValues.push_back(p.first);
             }
 
             // Create an ordered list of types for the referenced constants
             vector<Type*> referencedTypes;
-            for(vector<Constant*>::iterator c_iter = referencedValues.begin();
-                c_iter != referencedValues.end(); c_iter++) {
-
-                Constant* c = *c_iter;
+            for(Constant* c : referencedValues) {
                 referencedTypes.push_back(c->getType());
             }
 
@@ -571,8 +559,8 @@ struct StabilizerImpl {
         } else if(isa<ConstantExpr>(v)) {
             ConstantExpr* e = dyn_cast<ConstantExpr>(v);
 
-            for(ConstantExpr::op_iterator use = e->op_begin(); use != e->op_end(); use++) {
-                if(containsGlobal(use->get())) {
+            for(Use& use : e->operands()) {
+                if(containsGlobal(use.get())) {
                     return true;
                 }
             }
@@ -614,15 +602,15 @@ struct StabilizerImpl {
                 } else {
                     // TODO: only process control flow targets on platforms that don't have PC-relative data addressing
 
-                    for(Instruction::op_iterator use = i->op_begin(); use != i->op_end(); use++) {
-                        Value* operand = use->get();
+                    for(Use& use : i->operands()) {
+                        Value* operand = use.get();
                         if(isa<Constant>(operand) && containsGlobal(operand)) {
                             Constant* c = dyn_cast<Constant>(operand);
                             if(result.find(c) == result.end()) {
                                 result[c] = set<Use*>();
                             }
 
-                            result[c].insert(use);
+                            result[c].insert(&use);
                         }
                     }
                 }
@@ -644,11 +632,8 @@ struct StabilizerImpl {
     void extractFloatOperations(Function& f) {
         Module& m = *f.getParent();
         vector<Instruction*> to_delete;
-        for(Function::iterator b_iter = f.begin(); b_iter != f.end(); b_iter++) {
-            BasicBlock& b = *b_iter;
-            for(BasicBlock::iterator i_iter = b.begin(); i_iter != b.end(); i_iter++) {
-                Instruction& i = *i_iter;
-
+        for(BasicBlock& b : f) {
+            for(Instruction& i : b) {
                 if(isa<FPToSIInst>(&i)
                     || isa<FPToUIInst>(&i)
                     || isa<SIToFPInst>(&i)
@@ -665,8 +650,8 @@ struct StabilizerImpl {
                     to_delete.push_back(&i);
 
                 } else {
-                    for(Instruction::op_iterator op_iter = i.op_begin(); op_iter != i.op_end(); op_iter++) {
-                        Value* op = *op_iter;
+                    for(Use& op_iter : i.operands()) {
+                        Value* op = op_iter;
 
                         if(isa<Constant>(op)) {
                             Constant* c = dyn_cast<Constant>(op);
@@ -680,13 +665,13 @@ struct StabilizerImpl {
 
                                 if(isa<PHINode>(insertion_point)) {
                                     PHINode* phi = dyn_cast<PHINode>(insertion_point);
-                                    BasicBlock *incoming = phi->getIncomingBlock(*op_iter);
+                                    BasicBlock *incoming = phi->getIncomingBlock(op_iter);
                                     insertion_point = incoming->getTerminator();
                                 }
 
                                 LoadInst* load = new LoadInst(t, g, "fconst.load", insertion_point);
 
-                                op_iter->set(load);
+                                op_iter.set(load);
                             }
                         }
                     }
@@ -710,8 +695,8 @@ struct StabilizerImpl {
 
         } else if(isa<ConstantExpr>(c)) {
 
-            for(Constant::op_iterator op_iter = c->op_begin(); op_iter != c->op_end(); op_iter++) {
-                Constant* op = dyn_cast<Constant>(op_iter->get());
+            for(Use& op_iter : c->operands()) {
+                Constant* op = dyn_cast<Constant>(op_iter.get());
 
                 if(containsConstantFloat(op)) {
                     return true;
@@ -829,6 +814,7 @@ struct StabilizerImpl {
         Function *free_fn = m.getFunction("free");
 
         if(malloc_fn) {
+            // void* stabilizer_malloc(size_t sz)
             Function *stabilizer_malloc = Function::Create(
                  malloc_fn->getFunctionType(),
                  Function::ExternalLinkage,
@@ -840,6 +826,7 @@ struct StabilizerImpl {
         }
 
         if(calloc_fn) {
+            // void* stabilizer_calloc(size_t n, size_t sz)
             Function *stabilizer_calloc = Function::Create(
                  calloc_fn->getFunctionType(),
                  Function::ExternalLinkage,
@@ -851,6 +838,7 @@ struct StabilizerImpl {
         }
 
         if(realloc_fn) {
+            // void* stabilizer_realloc(void *p, size_t sz)
             Function *stabilizer_realloc = Function::Create(
                  realloc_fn->getFunctionType(),
                  Function::ExternalLinkage,
@@ -862,6 +850,7 @@ struct StabilizerImpl {
         }
 
         if(free_fn) {
+            // void stabilizer_free(void *p)
             Function *stabilizer_free = Function::Create(
                  free_fn->getFunctionType(),
                  Function::ExternalLinkage,
