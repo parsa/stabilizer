@@ -1,5 +1,3 @@
-#define DEBUG_TYPE "stabilizer"
-
 #include <llvm/Pass.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/PassPlugin.h>
@@ -16,8 +14,9 @@
 #include <set>
 #include <vector>
 
+#define DEBUG_TYPE "stabilizer"
+
 using namespace llvm;
-using namespace llvm::cl;
 
 using namespace std;
 
@@ -26,9 +25,9 @@ enum {
 };
 
 // Randomization configuration options
-opt<bool> stabilize_heap   ("stabilize-heap",    init(false), desc("Randomize heap object placement"));
-opt<bool> stabilize_stack  ("stabilize-stack",   init(false), desc("Randomize stack frame placement"));
-opt<bool> stabilize_code   ("stabilize-code",    init(false), desc("Randomize function placement"));
+cl::opt<bool> stabilize_heap   ("stabilize-heap",    cl::init(false), cl::desc("Randomize heap object placement"));
+cl::opt<bool> stabilize_stack  ("stabilize-stack",   cl::init(false), cl::desc("Randomize stack frame placement"));
+cl::opt<bool> stabilize_code   ("stabilize-code",    cl::init(false), cl::desc("Randomize function placement"));
 
 struct StabilizerImpl {
     static char ID;
@@ -128,7 +127,7 @@ struct StabilizerImpl {
      * \arg m The module being transformed
      * \returns whether or not the module was modified (always true)
      */
-    bool runOnModule(Module &m) {
+    bool operator()(Module &m) {
         // Replace calls to heap functions with Stabilizer's random heap
         if(stabilize_heap) {
             randomizeHeap(m);
@@ -136,93 +135,89 @@ struct StabilizerImpl {
 
         // Build a set of locally-defined functions
         set<Function*> local_functions;
-        for(Module::iterator f = m.begin(); f != m.end(); f++) {
-            if(!f->isIntrinsic()
-                && !f->isDeclaration()
-                && !f->getName().equals("__gxx_personality_v0")) {
+        for(llvm::Function& f : m)
+        {
+            if(!f.isIntrinsic()
+                && !f.isDeclaration()
+                && !f.getName().equals("__gxx_personality_v0")) {
 
-                local_functions.insert(&*f);
+                local_functions.insert(&f);
             }
         }
 
-        // declareRuntimeFunctions(m);
+        declareRuntimeFunctions(m);
 
-        // map<Function*, GlobalVariable*> stackPads;
+        map<Function*, GlobalVariable*> stackPads;
 
-        // // Declare the stack pad table type
-        // Type* stackPadType = Type::getInt8Ty(m.getContext());
+        // Declare the stack pad table type
+        Type* stackPadType = Type::getInt8Ty(m.getContext());
 
-        // // Enable stack randomization
-        // if(stabilize_stack) {
-        //     // Transform each function
-        //     for(set<Function*>::iterator f_iter = local_functions.begin(); f_iter != local_functions.end(); f_iter++) {
-        //         Function* f = *f_iter;
+        // Enable stack randomization
+        if(stabilize_stack) {
+            // Transform each function
+            for(Function* f : local_functions) {
+                // Create the stack pad table
+                GlobalVariable* pad = new GlobalVariable(
+                    m,
+                    stackPadType,
+                    false,
+                    GlobalValue::InternalLinkage,
+                    getInt(m, 8, 0, false),
+                    f->getName()+".stack_pad"
+                );
 
-        //         // Create the stack pad table
-        //         GlobalVariable* pad = new GlobalVariable(
-        //             m,
-        //             stackPadType,
-        //             false,
-        //             GlobalValue::InternalLinkage,
-        //             getInt(m, 8, 0, false),
-        //             f->getName()+".stack_pad"
-        //         );
+                stackPads[f] = pad;
 
-        //         stackPads[f] = pad;
+                randomizeStack(m, *f, pad);
+            }
+        }
 
-        //         randomizeStack(m, *f, pad);
-        //     }
-        // }
+        // Get any existing module constructors
+        vector<Value*> old_ctors = getConstructors(m);
 
-        // // Get any existing module constructors
-        // vector<Value*> old_ctors = getConstructors(m);
+        // Create a new constructor
+        Function* ctor = makeConstructor(m, "stabilizer.module_ctor");
+        BasicBlock* ctor_bb = BasicBlock::Create(m.getContext(), "", ctor);
 
-        // // Create a new constructor
-        // Function* ctor = makeConstructor(m, "stabilizer.module_ctor");
-        // BasicBlock* ctor_bb = BasicBlock::Create(m.getContext(), "", ctor);
+        // Enable code randomization
+        if(stabilize_code) {
+            // Transform each function and register it with the stabilizer runtime
+            for(Function* f : local_functions) {
+                vector<Value*> args = randomizeCode(m, *f);
 
-        // // Enable code randomization
-        // if(stabilize_code) {
-        //     // Transform each function and register it with the stabilizer runtime
-        //     for(set<Function*>::iterator f_iter = local_functions.begin();
-        //         f_iter != local_functions.end(); f_iter++) {
+                Value* table = stackPads[f];
+                if(table == NULL) {
+                    table = Constant::getNullValue(PointerType::get(stackPadType, 0));
+                }
 
-        //         Function* f = *f_iter;
-        //         vector<Value*> args = randomizeCode(m, *f);
+                args.push_back(table);
 
-        //         Value* table = stackPads[f];
-        //         if(table == NULL) {
-        //             table = Constant::getNullValue(PointerType::get(stackPadType, 0));
-        //         }
+                CallInst::Create(registerFunction, args, "", ctor_bb);
+            }
+        }
 
-        //         args.push_back(table);
+        // Register each existing constructor with the stabilizer runtime
+        for(vector<Value*>::iterator ctor_iter = old_ctors.begin(); ctor_iter != old_ctors.end(); ctor_iter++) {
+            vector<Value*> args;
+            args.push_back(*ctor_iter);
+            CallInst::Create(registerConstructor, args, "", ctor_bb);
+        }
 
-        //         CallInst::Create(registerFunction, args, "", ctor_bb);
-        //     }
-        // }
+        // If we're not randomizing code, declare the stack tables by themselves
+        if(stabilize_stack && !stabilize_code) {
+            for(map<Function*, GlobalVariable*>::iterator iter = stackPads.begin(); iter != stackPads.end(); iter++) {
+                vector<Value*> args;
+                args.push_back(iter->second);
+                CallInst::Create(registerStackPad, args, "", ctor_bb);
+            }
+        }
 
-        // // Register each existing constructor with the stabilizer runtime
-        // for(vector<Value*>::iterator ctor_iter = old_ctors.begin(); ctor_iter != old_ctors.end(); ctor_iter++) {
-        //     vector<Value*> args;
-        //     args.push_back(*ctor_iter);
-        //     CallInst::Create(registerConstructor, args, "", ctor_bb);
-        // }
+        ReturnInst::Create(m.getContext(), ctor_bb);
 
-        // // If we're not randomizing code, declare the stack tables by themselves
-        // if(stabilize_stack && !stabilize_code) {
-        //     for(map<Function*, GlobalVariable*>::iterator iter = stackPads.begin(); iter != stackPads.end(); iter++) {
-        //         vector<Value*> args;
-        //         args.push_back(iter->second);
-        //         CallInst::Create(registerStackPad, args, "", ctor_bb);
-        //     }
-        // }
-
-        // ReturnInst::Create(m.getContext(), ctor_bb);
-
-        // Function *main = m.getFunction("main");
-        // if(main != NULL) {
-        //     main->setName("stabilizer_main");
-        // }
+        Function *main = m.getFunction("main");
+        if(main != NULL) {
+            main->setName("stabilizer_main");
+        }
 
         return true;
     }
@@ -606,9 +601,9 @@ struct StabilizerImpl {
     map<Constant*, set<Use*> > findPCRelativeUsesIn(Function& f) {
         map<Constant*, set<Use*> > result;
 
-        for(Function::iterator b = f.begin(); b != f.end(); b++) {
-            for(BasicBlock::iterator i_iter = b->begin(); i_iter != b->end(); i_iter++) {
-                Instruction* i = &*i_iter;
+        for(BasicBlock& b : f) {
+            for(Instruction& i_iter : b) {
+                Instruction* i = &i_iter;
 
                 if(isa<PHINode>(i)) {
                     PHINode* phi = dyn_cast<PHINode>(i);
@@ -710,10 +705,7 @@ struct StabilizerImpl {
             }
         }
 
-        for(vector<Instruction*>::iterator i_iter = to_delete.begin();
-            i_iter != to_delete.end(); i_iter++) {
-
-            Instruction* i = *i_iter;
+        for(Instruction* i : to_delete) {
             i->eraseFromParent();
         }
     }
@@ -944,7 +936,7 @@ struct Stabilizer : public PassInfoMixin<Stabilizer>
 {
     PreservedAnalyses run(Module& M, ModuleAnalysisManager& MAM)
     {
-        stabilizer.runOnModule(M);
+        stabilizer(M);
         return PreservedAnalyses::none();
     }
     static bool isRequired()
@@ -967,7 +959,7 @@ struct StabilizerLegacy : public ModulePass
 
     bool runOnModule(llvm::Module& M)
     {
-        stabilizer.runOnModule(M);
+        stabilizer(M);
         return true;
     }
 

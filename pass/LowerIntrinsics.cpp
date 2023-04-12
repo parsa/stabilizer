@@ -1,5 +1,3 @@
-#define DEBUG_TYPE "lower_intrinsics"
-
 #include <iostream>
 #include <set>
 
@@ -17,6 +15,7 @@
 
 using namespace llvm;
 
+#define DEBUG_TYPE "lower_intrinsics"
 
 bool lowerInstrinsicsPass(Module &m)
 {
@@ -24,8 +23,7 @@ bool lowerInstrinsicsPass(Module &m)
 
     std::set<Function*> toDelete;
 
-    for(Module::iterator fun = m.begin(); fun != m.end(); fun++) {
-        llvm::Function &f = *fun;
+    for(llvm::Function &f : m) {
         if(f.isIntrinsic() && !isAlwaysInlined(f.getName())) {
             StringRef r = GetLibcall(f.getName());
 
@@ -48,8 +46,8 @@ bool lowerInstrinsicsPass(Module &m)
         }
     }
 
-    for(std::set<Function*>::iterator iter = toDelete.begin(); iter != toDelete.end(); iter++) {
-        (*iter)->eraseFromParent();
+    for(Function* iter : toDelete) {
+        iter->eraseFromParent();
     }
 
     return true;
