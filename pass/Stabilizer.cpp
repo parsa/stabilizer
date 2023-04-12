@@ -272,7 +272,6 @@ struct StabilizerImpl {
         PointerType* ctor_fn_p_t = PointerType::get(ctor_fn_t, 0);
 
         // Constructor table entry type
-        // StructType* ctor_entry_t = StructType::get(i32_t, ctor_fn_p_t, NULL);
         StructType* ctor_entry_t = StructType::get(i32_t, ctor_fn_p_t);
 
         // Create constructor function
@@ -283,11 +282,10 @@ struct StabilizerImpl {
 
         // Add the entry for the new constructor
         ctor_entries.push_back(
-            ConstantStruct::get(ctor_entry_t, {
+            ConstantStruct::get(ctor_entry_t, 
                 ConstantInt::get(i32_t, 65535, false),
-                init,
-                NULL
-            })
+                init
+            )
         );
 
         // set up the constant initializer for the new constructor table
@@ -362,7 +360,7 @@ struct StabilizerImpl {
             Instruction* next = c->getNextNode();
 
             // Load the stack pad size and widen it to an intptr
-            Value* pad = new LoadInst(getIntptrType(m), stackPad, "pad", c);
+            Value* pad = new LoadInst(Type::getInt8Ty(m.getContext()), stackPad, "pad", c);
             Value* wide_pad = ZExtInst::CreateZExtOrBitCast(pad, getIntptrType(m), "", c);
 
             // Multiply the pad by the required stack alignment
@@ -480,14 +478,8 @@ struct StabilizerImpl {
 
             // Rewrite global references to use the relocation table
             size_t index = 0;
-            for(vector<Constant*>::iterator c_iter = referencedValues.begin(); c_iter != referencedValues.end(); c_iter++) {
-                Constant* c = *c_iter;
-
-                for(set<Use*>::iterator u_iter = references[c].begin();
-                    u_iter != references[c].end(); u_iter++) {
-
-                    Use* u = *u_iter;
-
+            for(Constant* c : referencedValues) {
+                for(Use* u : references[c]) {
                     Instruction* insertion_point = dyn_cast<Instruction>(u->getUser());
                     assert(insertion_point != NULL && "Only instruction uses can be rewritten");
 
@@ -695,7 +687,7 @@ struct StabilizerImpl {
                                     insertion_point = incoming->getTerminator();
                                 }
 
-                                LoadInst* load = new LoadInst(g->getType(), g, "fconst.load", insertion_point);
+                                LoadInst* load = new LoadInst(t, g, "fconst.load", insertion_point);
 
                                 op_iter->set(load);
                             }
