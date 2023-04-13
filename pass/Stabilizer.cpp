@@ -265,12 +265,15 @@ struct StabilizerImpl {
         // 32 bit integer type
         Type* i32_t = Type::getInt32Ty(m.getContext());
 
+        // Void pointer type
+        Type* void_p_t = Type::getInt8PtrTy(m.getContext());
+
         // Constructor function type
         FunctionType* ctor_fn_t = FunctionType::get(void_t, false);
         PointerType* ctor_fn_p_t = PointerType::get(ctor_fn_t, 0);
 
-        // Constructor table entry type
-        StructType* ctor_entry_t = StructType::get(i32_t, ctor_fn_p_t);
+        // Constructor table entry type { i32, ptr, ptr }
+        StructType* ctor_entry_t = StructType::get(i32_t, ctor_fn_p_t, void_p_t);
 
         // Create constructor function
         Function* init = Function::Create(ctor_fn_t, Function::InternalLinkage, name, &m);
@@ -279,14 +282,17 @@ struct StabilizerImpl {
         vector<Constant*> ctor_entries;
 
         // Add the entry for the new constructor
+        // { i32 65535, ptr @stabilizer.module_ctor, ptr null }
         ctor_entries.push_back(
-            ConstantStruct::get(ctor_entry_t, 
+            ConstantStruct::get(ctor_entry_t,
                 ConstantInt::get(i32_t, 65535, false),
-                init
+                init,
+                Constant::getNullValue(void_p_t)
             )
         );
 
         // set up the constant initializer for the new constructor table
+        // [1 x { .... }] [{ ... } { ... }]
         Constant *ctor_array_const = ConstantArray::get(
             ArrayType::get(
                 ctor_entries[0]->getType(),
@@ -296,6 +302,7 @@ struct StabilizerImpl {
         );
 
         // create the new constructor table
+        // @0 = appending constant [1 x { .... }] [{ ... } { ... }]
         GlobalVariable *new_ctors = new GlobalVariable(
             m,
             ctor_array_const->getType(),
@@ -307,6 +314,7 @@ struct StabilizerImpl {
 
         // Get the existing constructor array from the module, if any
         GlobalVariable *ctors = m.getGlobalVariable("llvm.global_ctors", false);
+        // errs() << "Existing constructor table    " << *ctors << "\n";
 
         // give the new constructor table the appropriate name, taking it from the current table if one exists
         if(ctors) {
@@ -317,6 +325,7 @@ struct StabilizerImpl {
         } else {
             new_ctors->setName("llvm.global_ctors");
         }
+        // errs() << "New constructor table         " << *new_ctors << "\n";
 
         return init;
     }
