@@ -130,6 +130,7 @@ passes = []
 stabilize_opts = []
 
 args.l.append('stdc++')
+args.l.append('m')
 # args.v = True
 
 if 'code' in args.R:
