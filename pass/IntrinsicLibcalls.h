@@ -59,10 +59,10 @@ void InitLibcalls() {
     libcall_map["llvm.memcpy.p0i8.p0i8.i32"] = "memcpy";
     libcall_map["llvm.memcpy.p0i8.p0i8.i64"] = "memcpy";
     
-    libcall_map["llvm.memcpy.i8"] =  "memcpy";
-    libcall_map["llvm.memcpy.i16"] = "memcpy";
-    libcall_map["llvm.memcpy.i32"] = "memcpy";
-    libcall_map["llvm.memcpy.i64"] = "memcpy";
+    libcall_map["llvm.memcpy.p0.p0.i8"] =  "memcpy";
+    libcall_map["llvm.memcpy.p0.p0.i16"] = "memcpy";
+    libcall_map["llvm.memcpy.p0.p0.i32"] = "memcpy";
+    libcall_map["llvm.memcpy.p0.p0.i64"] = "memcpy";
 
     libcall_map["llvm.memmove.p0i8.p0i8.i8"] =  "memmove";
     libcall_map["llvm.memmove.p0i8.p0i8.i16"] = "memmove";
@@ -79,10 +79,11 @@ void InitLibcalls() {
     libcall_map["llvm.memset.p0i8.i32"] = "memset_i32";
     libcall_map["llvm.memset.p0i8.i64"] = "memset_i64";
     
-    libcall_map["llvm.memset.i8"] =  "memset_i8";
-    libcall_map["llvm.memset.i16"] = "memset_i16";
-    libcall_map["llvm.memset.i32"] = "memset_i32";
-    libcall_map["llvm.memset.i64"] = "memset_i64";
+    libcall_map["llvm.memset.p0.i8"] =  "memset_i8";
+    libcall_map["llvm.memset.p0.i16"] = "memset_i16";
+    libcall_map["llvm.memset.p0.i32"] = "memset_i32";
+    libcall_map["llvm.memset.p0.i64"] = "memset_i64";
+
 
     libcall_map["llvm.sqrt.f32"] = "sqrtf";
     libcall_map["llvm.sqrt.f64"] = "sqrt";
@@ -107,6 +108,10 @@ void InitLibcalls() {
     libcall_map["llvm.log10.f32"] = "log10f";
     libcall_map["llvm.log10.f64"] = "log10";
     libcall_map["llvm.log10.f80"] = "log10l";
+
+    libcall_map["llvm.fabs.f32"] = "fabsf";
+    libcall_map["llvm.fabs.f64"] = "fabs";
+    libcall_map["llvm.fabs.f80"] = "fabsl";
 }
 
 bool isAlwaysInlined(StringRef intrinsic) {
