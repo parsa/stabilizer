@@ -24,6 +24,11 @@ private:
     
 public:
     FunctionHeader(Function* f) : _f(f) {}
+    FunctionHeader() {} // No-op constructor
+    
+    void setFunction(Function* f) {
+        _f = f;
+    }
     
     void jumpTo(void* target) {
         new(_jmp) Jump(target);
@@ -45,19 +50,30 @@ private:
     MemRange _code;
     MemRange _table;
     FunctionHeader* _header;
-    FunctionHeader _savedHeader;
+    uint8_t _savedHeader[64]; // Save raw bytes to preserve padding and straddling instructions
     
     bool _tableAdjacent;    //< If true, the relocation table should be placed next to the function
     
     uint8_t* _stackPad;		//< The address of the stack pad value for this function
+    void** _tableSlot;
     
     FunctionLocation* _current;
     
+    static size_t computeCodeSize(void* codeBase, void* codeLimit) {
+        uintptr_t baseAddr = reinterpret_cast<uintptr_t>(codeBase);
+        uintptr_t limitAddr = reinterpret_cast<uintptr_t>(codeLimit);
+        if(limitAddr >= baseAddr) {
+            return limitAddr - baseAddr;
+        }
+        return baseAddr - limitAddr;
+    }
+
     /**
      * \brief Place a jump instruction to forward calls to this function
      * \arg target The destination of the jump instruction
      */
     inline void forward(void* target) {
+        _header->setFunction(this);
         _header->jumpTo(target);
         flush_icache(_header, sizeof(FunctionHeader));
     }
@@ -90,23 +106,7 @@ public:
     * \arg tableAdjacent If true, the relocation table should be placed immediately after the function
 	* \arg stackPad The address of this function's stack pad size
     */
-    inline Function(void* codeBase, void* codeLimit, void* tableBase, size_t tableSize, bool tableAdjacent, uint8_t* stackPad) :
-        _code(codeBase, codeLimit), _table(tableBase, tableSize), _savedHeader(*(FunctionHeader*)_code.base()) {
-        
-        this->_tableAdjacent = tableAdjacent;
-        this->_stackPad = stackPad;
-        this->_current = NULL;
-
-        // Make the function header writable
-        if(mprotect(_code.pageBase(), _code.pageSize(), PROT_READ | PROT_WRITE | PROT_EXEC)) {
-            perror("Unable make code writable");
-            abort();
-        }
-        
-        // Make a copy of the function header
-        _savedHeader = *(FunctionHeader*)_code.base();
-        _header = new(_code.base()) FunctionHeader(this);
-    }
+    Function(void* codeBase, void* codeLimit, void* tableBase, size_t tableSize, bool tableAdjacent, void** tableSlot, uint8_t* stackPad);
     
     /**
      * \brief Free all code locations when deleted
@@ -114,11 +114,13 @@ public:
     ~Function();
     
     FunctionLocation* relocate();
+    void randomizeStackPad();
     
     /**
      * \brief Place a trap instruction at the beginning of this function
      */
     inline void setTrap() {
+        _header->setFunction(this);
         _header->trap();
     }
     
@@ -128,6 +130,27 @@ public:
     
     inline size_t getCodeSize() {
         return _code.size();
+    }
+
+    inline bool hasRelocationTable() const {
+        return _table.size() > 0;
+    }
+    
+    inline size_t getTableSize() const {
+        return _table.size();
+    }
+
+    inline void* getOriginalTableBase() {
+        if(_table.size() == 0) {
+            return nullptr;
+        }
+        if(_tableSlot != nullptr) {
+            return *_tableSlot;
+        }
+        // For the original code (before relocation), the table is in the data section.
+        // Even if _tableAdjacent is true, it only applies to the relocated copy on the heap.
+        // The original table is always at _table.base().
+        return _table.base();
     }
     
     inline size_t getAllocationSize() {

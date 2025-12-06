@@ -484,7 +484,7 @@ void compressStream ( FILE *stream, FILE *zStream )
       outputHandleJustInCase = SPEC_NULLCAST NULL;
       if (ret == EOF) goto errhandler_io;
    }
-   outputHandleJustInCase = NULL;
+   outputHandleJustInCase = 0;
    if (ferror(stream)) goto errhandler_io;
    ret = fclose ( stream );
    if (ret == EOF) goto errhandler_io;
@@ -611,7 +611,7 @@ Bool uncompressStream ( FILE *zStream, FILE *stream )
       outputHandleJustInCase = SPEC_NULLCAST NULL;
       if (ret == EOF) goto errhandler_io;
    }
-   outputHandleJustInCase = NULL;
+   outputHandleJustInCase = 0;
    if (verbosity >= 2) fprintf ( stderr, "\n    " );
    return True;
 
@@ -1426,7 +1426,7 @@ void compress ( Char *name )
    outputHandleJustInCase = outStr;
    deleteOutputOnInterrupt = True;
    compressStream ( inStr, outStr );
-   outputHandleJustInCase = NULL;
+   outputHandleJustInCase = 0;
 
    /*--- If there was an I/O error, we won't get here. ---*/
    if ( srcMode == SM_F2F ) {
@@ -1603,7 +1603,7 @@ void uncompress ( Char *name )
    outputHandleJustInCase = outStr;
    deleteOutputOnInterrupt = True;
    magicNumberOK = uncompressStream ( inStr, outStr );
-   outputHandleJustInCase = NULL;
+   outputHandleJustInCase = 0;
 
    /*--- If there was an I/O error, we won't get here. ---*/
    if ( magicNumberOK ) {
@@ -1721,7 +1721,7 @@ void testf ( Char *name )
    }
 
    /*--- Now the input handle is sane.  Do the Biz. ---*/
-   outputHandleJustInCase = NULL;
+   outputHandleJustInCase = 0;
    allOK = testStream ( inStr );
 
    if (allOK && verbosity >= 1) fprintf ( stderr, "ok\n" );

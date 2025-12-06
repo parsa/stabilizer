@@ -40,7 +40,7 @@ public:
         return (void*)_limit;
     }
     
-    inline size_t size() {
+    inline size_t size() const {
         return (size_t)(_limit - _base);
     }
     

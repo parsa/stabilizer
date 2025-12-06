@@ -8,17 +8,20 @@
 #ifndef INTRINSICLIBCALLS_H_
 #define INTRINSICLIBCALLS_H_
 
+#include "llvm/ADT/StringRef.h"
+
 #include <map>
 #include <set>
 
-using namespace std;
-using namespace llvm;
+using llvm::StringRef;
 
-map<StringRef, StringRef> libcall_map;
+static std::map<StringRef, StringRef> libcall_map;
 
-set<StringRef> inlined;
+static std::set<StringRef> inlined;
 
 void InitLibcalls() {
+    if (!inlined.empty()) return; // Already initialized
+
     inlined.insert("llvm.va_start");
     inlined.insert("llvm.va_copy");
     inlined.insert("llvm.va_end");
@@ -54,74 +57,144 @@ void InitLibcalls() {
 
     inlined.insert("llvm.lifetime.start");
     inlined.insert("llvm.lifetime.end");
+    inlined.insert("llvm.lifetime.start.p0");
+    inlined.insert("llvm.lifetime.end.p0");
 
-    libcall_map["llvm.memcpy.p0i8.p0i8.i8"] =  "memcpy";
-    libcall_map["llvm.memcpy.p0i8.p0i8.i16"] = "memcpy";
-    libcall_map["llvm.memcpy.p0i8.p0i8.i32"] = "memcpy";
-    libcall_map["llvm.memcpy.p0i8.p0i8.i64"] = "memcpy";
-    
-    libcall_map["llvm.memcpy.i8"] =  "memcpy";
-    libcall_map["llvm.memcpy.i16"] = "memcpy";
-    libcall_map["llvm.memcpy.i32"] = "memcpy";
-    libcall_map["llvm.memcpy.i64"] = "memcpy";
+    libcall_map["llvm.powi.f32.i32"] = "powif";
+    libcall_map["llvm.powi.f64.i32"] = "powid";
+    libcall_map["llvm.powi.f80.i32"] = "powil";
+}
 
-    libcall_map["llvm.memmove.p0i8.p0i8.i8"] =  "memmove";
-    libcall_map["llvm.memmove.p0i8.p0i8.i16"] = "memmove";
-    libcall_map["llvm.memmove.p0i8.p0i8.i32"] = "memmove";
-    libcall_map["llvm.memmove.p0i8.p0i8.i64"] = "memmove";
-    
-    libcall_map["llvm.memmove.i8"] =  "memmove";
-    libcall_map["llvm.memmove.i16"] = "memmove";
-    libcall_map["llvm.memmove.i32"] = "memmove";
-    libcall_map["llvm.memmove.i64"] = "memmove";
+static StringRef matchMemoryIntrinsic(StringRef intrinsic) {
+    if(!intrinsic.starts_with("llvm.")) {
+        return "";
+    }
+    StringRef rest = intrinsic.drop_front(5);
 
-    libcall_map["llvm.memset.p0i8.i8"] =  "memset_i8";
-    libcall_map["llvm.memset.p0i8.i16"] = "memset_i16";
-    libcall_map["llvm.memset.p0i8.i32"] = "memset_i32";
-    libcall_map["llvm.memset.p0i8.i64"] = "memset_i64";
-    
-    libcall_map["llvm.memset.i8"] =  "memset_i8";
-    libcall_map["llvm.memset.i16"] = "memset_i16";
-    libcall_map["llvm.memset.i32"] = "memset_i32";
-    libcall_map["llvm.memset.i64"] = "memset_i64";
+    auto startsWithAny = [&](StringRef prefix) -> bool {
+        return rest.starts_with(prefix);
+    };
 
-    libcall_map["llvm.sqrt.f32"] = "sqrtf";
-    libcall_map["llvm.sqrt.f64"] = "sqrt";
-    libcall_map["llvm.sqrt.f80"] = "sqrtl";
+    if(startsWithAny("memcpy.") || startsWithAny("memcpy.inline.") || startsWithAny("memcpy.element.unordered.atomic.")) {
+        return "memcpy";
+    }
+    if(startsWithAny("memmove.") || startsWithAny("memmove.inline.") || startsWithAny("memmove.element.unordered.atomic.")) {
+        return "memmove";
+    }
+    if(startsWithAny("memset.") || startsWithAny("memset.inline.") || startsWithAny("memset.element.unordered.atomic.")) {
+        size_t lastDot = intrinsic.rfind('.');
+        if(lastDot == StringRef::npos || lastDot + 1 >= intrinsic.size()) {
+            return "";
+        }
+        StringRef lenTy = intrinsic.drop_front(lastDot + 1);
+        if(!lenTy.consume_front("i")) {
+            return "";
+        }
+        if(lenTy == "8") {
+            return "memset_i8";
+        } else if(lenTy == "16") {
+            return "memset_i16";
+        } else if(lenTy == "32") {
+            return "memset_i32";
+        } else {
+            return "memset_i64";
+        }
+    }
 
-    libcall_map["llvm.log.f32"] = "logf";
-    libcall_map["llvm.log.f64"] = "log";
-    libcall_map["llvm.log.f80"] = "logl";
+    return "";
+}
 
-    libcall_map["llvm.exp.f32"] = "expf";
-    libcall_map["llvm.exp.f64"] = "exp";
-    libcall_map["llvm.exp.f80"] = "expl";
+static StringRef mapMathLibcall(StringRef base, StringRef type) {
+    auto pick = [&](StringRef f32, StringRef f64, StringRef f80) -> StringRef {
+        if(type == "f32") return f32;
+        if(type == "f64") return f64;
+        if(type == "f80") return f80;
+        return "";
+    };
 
-    libcall_map["llvm.pow.f32"] = "powf";
-    libcall_map["llvm.pow.f64"] = "pow";
-    libcall_map["llvm.pow.f80"] = "powl";
+    if(base == "sqrt") {
+        return pick("sqrtf", "sqrt", "sqrtl");
+    } else if(base == "log") {
+        return pick("logf", "log", "logl");
+    } else if(base == "exp") {
+        return pick("expf", "exp", "expl");
+    } else if(base == "pow") {
+        return pick("powf", "pow", "powl");
+    } else if(base == "powi") {
+        return pick("powif", "powid", "powil");
+    } else if(base == "fabs") {
+        return pick("fabsf", "fabs", "fabsl");
+    } else if(base == "log10") {
+        return pick("log10f", "log10", "log10l");
+    }
+    return "";
+}
 
-    libcall_map["llvm.powi.f32"] = "powif";
-    libcall_map["llvm.powi.f64"] = "powif";
-    libcall_map["llvm.powi.f80"] = "powil";
+static StringRef matchScalarMathIntrinsic(StringRef intrinsic) {
+    if(!intrinsic.starts_with("llvm.")) {
+        return "";
+    }
+    StringRef rest = intrinsic.drop_front(5);
+    auto pair = rest.split('.');
+    StringRef base = pair.first;
+    StringRef suffix = pair.second;
+    if(base.empty() || suffix.empty()) {
+        return "";
+    }
 
-    libcall_map["llvm.log10.f32"] = "log10f";
-    libcall_map["llvm.log10.f64"] = "log10";
-    libcall_map["llvm.log10.f80"] = "log10l";
+    if(base == "powi") {
+        auto typeAndRest = suffix.split('.');
+        StringRef type = typeAndRest.first;
+        if(type.empty()) {
+            return "";
+        }
+        return mapMathLibcall(base, type);
+    }
+
+    // Ignore vector forms: they contain 'v' immediately after base.
+    if(suffix.starts_with("v")) {
+        return "";
+    }
+
+    auto type = suffix.split('.').first;
+    return mapMathLibcall(base, type);
+}
+
+static bool isPatternInlined(StringRef intrinsic) {
+    if(!intrinsic.starts_with("llvm.")) {
+        return false;
+    }
+    StringRef rest = intrinsic.drop_front(5);
+    auto skipVector = [&](StringRef base) {
+        return rest.starts_with(base);
+    };
+    return skipVector("sqrt.v") || skipVector("log.v") || skipVector("exp.v")
+        || skipVector("pow.v") || skipVector("powi.v")
+        || skipVector("fabs.v") || skipVector("log10.v");
 }
 
 bool isAlwaysInlined(StringRef intrinsic) {
-    return inlined.find(intrinsic) != inlined.end();
+    if(inlined.find(intrinsic) != inlined.end()) {
+        return true;
+    }
+    return isPatternInlined(intrinsic);
 }
 
 StringRef GetLibcall(StringRef intrinsic) {
-    return libcall_map[intrinsic];
-    map<StringRef, StringRef>::iterator i = libcall_map.find(intrinsic);
-    if(i == libcall_map.end()) {
-        return "";
-    } else {
-        return i->second;
+    auto found = libcall_map.find(intrinsic);
+    if(found != libcall_map.end()) {
+        return found->second;
     }
+
+    if(StringRef mem = matchMemoryIntrinsic(intrinsic); !mem.empty()) {
+        return mem;
+    }
+
+    if(StringRef math = matchScalarMathIntrinsic(intrinsic); !math.empty()) {
+        return math;
+    }
+
+    return "";
 }
 
 #endif /* INTRINSICLIBCALLS_H_ */

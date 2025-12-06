@@ -1,6 +1,6 @@
 ROOT = ..
 
 RECURSIVE_TARGETS = test
-DIRS = HelloWorld libquantum bzip2
+DIRS = passes runtime integration
 
 include $(ROOT)/common.mk

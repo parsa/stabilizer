@@ -1,24 +1,34 @@
+#undef DEBUG_TYPE
 #define DEBUG_TYPE "stabilizer"
 
-#include <llvm/Pass.h>
-#include <llvm/Module.h>
-#include <llvm/Constants.h>
-#include <llvm/Intrinsics.h>
-#include <llvm/Instructions.h>
-
+#include <llvm/ADT/DenseMap.h>
+#include <llvm/IR/CFG.h>
+#include <llvm/IR/Module.h>
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/Intrinsics.h>
+#include <llvm/IR/Instructions.h>
+#include <llvm/IR/Function.h>
+#include <llvm/IR/GlobalVariable.h>
+#include <llvm/IR/Type.h>
+#include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Support/Alignment.h>
 #include <llvm/Support/CommandLine.h>
-#include <llvm/Support/TypeBuilder.h>
+#include <llvm/Passes/PassPlugin.h>
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/IR/PassManager.h>
 
+#include "LowerIntrinsics.h"
+
+#include <algorithm>
 #include <map>
 #include <set>
+#include <string>
 #include <vector>
-#include <llvm/Intrinsics.gen>
 
 using namespace llvm;
-using namespace llvm::types;
 using namespace llvm::cl;
-
 using namespace std;
 
 enum {
@@ -30,14 +40,13 @@ opt<bool> stabilize_heap   ("stabilize-heap",    init(false), desc("Randomize he
 opt<bool> stabilize_stack  ("stabilize-stack",   init(false), desc("Randomize stack frame placement"));
 opt<bool> stabilize_code   ("stabilize-code",    init(false), desc("Randomize function placement"));
 
-struct StabilizerPass : public ModulePass {
-    static char ID;
-
-    Function* registerFunction;
-    Function* registerConstructor;
-    Function* registerStackPad;
+struct StabilizerPassNew : public PassInfoMixin<StabilizerPassNew> {
     
-    StabilizerPass() : ModulePass(ID) {}
+    Function* registerFunction = nullptr;
+    Function* registerConstructor = nullptr;
+    Function* registerStackPad = nullptr;
+    
+    StabilizerPassNew() {}
 
     enum Platform {
         x86_64,
@@ -81,19 +90,11 @@ struct StabilizerPass : public ModulePass {
      * \returns The width of a pointer in bits
      */
     Type* getIntptrType(Module& m) {
-        if(m.getPointerSize() == Module::Pointer32) {
-            return Type::getInt32Ty(m.getContext());
-        } else {
-            return Type::getInt64Ty(m.getContext());
-        }
+        return Type::getIntNTy(m.getContext(), m.getDataLayout().getPointerSizeInBits());
     }
     
     size_t getIntptrSize(Module& m) {
-        if(m.getPointerSize() == Module::Pointer32) {
-            return 32;
-        } else {
-            return 64;
-        }
+        return m.getDataLayout().getPointerSizeInBits();
     }
     
     Constant* getInt(Module& m, size_t bits, uint64_t value, bool is_signed) {
@@ -128,7 +129,7 @@ struct StabilizerPass : public ModulePass {
      * \arg m The module being transformed
      * \returns whether or not the module was modified (always true)
      */
-    virtual bool runOnModule(Module &m) {
+    PreservedAnalyses run(Module &m, ModuleAnalysisManager &MAM) {
         // Replace calls to heap functions with Stabilizer's random heap
         if(stabilize_heap) {
             randomizeHeap(m);
@@ -136,13 +137,16 @@ struct StabilizerPass : public ModulePass {
 
         // Build a set of locally-defined functions
         set<Function*> local_functions;
-        for(Module::iterator f = m.begin(); f != m.end(); f++) {
-            if(!f->isIntrinsic() 
-                && !f->isDeclaration() 
-                && !f->getName().equals("__gxx_personality_v0")) {
-                
-                local_functions.insert(&*f);
+        for(auto &f : m) {
+            if(f.isIntrinsic()
+                || f.isDeclaration()
+                || f.getName() == "__gxx_personality_v0"
+                || f.getLinkage() == GlobalValue::LinkOnceODRLinkage
+                || f.getLinkage() == GlobalValue::WeakODRLinkage) {
+                continue;
             }
+            
+            local_functions.insert(&f);
         }
         
         declareRuntimeFunctions(m);
@@ -150,14 +154,12 @@ struct StabilizerPass : public ModulePass {
         map<Function*, GlobalVariable*> stackPads;
         
         // Declare the stack pad table type
-		Type* stackPadType = Type::getInt8Ty(m.getContext());
+        Type* stackPadType = Type::getInt8Ty(m.getContext());
         
         // Enable stack randomization
         if(stabilize_stack) {
             // Transform each function
-            for(set<Function*>::iterator f_iter = local_functions.begin(); f_iter != local_functions.end(); f_iter++) {
-                Function* f = *f_iter;
-                
+            for(Function* f : local_functions) {
                 // Create the stack pad table
                 GlobalVariable* pad = new GlobalVariable(
                     m, 
@@ -181,50 +183,47 @@ struct StabilizerPass : public ModulePass {
         Function* ctor = makeConstructor(m, "stabilizer.module_ctor");
         BasicBlock* ctor_bb = BasicBlock::Create(m.getContext(), "", ctor);
 
-        // Enable code randomization
         if(stabilize_code) {
             // Transform each function and register it with the stabilizer runtime
-            for(set<Function*>::iterator f_iter = local_functions.begin();
-                f_iter != local_functions.end(); f_iter++) {
+            for(Function* f : local_functions) {
                 
-                Function* f = *f_iter;
                 vector<Value*> args = randomizeCode(m, *f);
                 
                 Value* table = stackPads[f];
-                if(table == NULL) {
-                    table = Constant::getNullValue(PointerType::get(stackPadType, 0));
+                if(table == nullptr) {
+                    table = Constant::getNullValue(PointerType::getUnqual(m.getContext()));
                 }
                 
                 args.push_back(table);
                 
-                CallInst::Create(registerFunction, args, "", ctor_bb);
+                CallInst::Create(registerFunction->getFunctionType(), registerFunction, args, "", ctor_bb);
             }
         }
         
         // Register each existing constructor with the stabilizer runtime
-        for(vector<Value*>::iterator ctor_iter = old_ctors.begin(); ctor_iter != old_ctors.end(); ctor_iter++) {
+        for(Value* v : old_ctors) {
             vector<Value*> args;
-            args.push_back(*ctor_iter);
-            CallInst::Create(registerConstructor, args, "", ctor_bb);
+            args.push_back(v);
+            CallInst::Create(registerConstructor->getFunctionType(), registerConstructor, args, "", ctor_bb);
         }
         
         // If we're not randomizing code, declare the stack tables by themselves
         if(stabilize_stack && !stabilize_code) {
-            for(map<Function*, GlobalVariable*>::iterator iter = stackPads.begin(); iter != stackPads.end(); iter++) {
+            for(auto &entry : stackPads) {
                 vector<Value*> args;
-                args.push_back(iter->second);
-                CallInst::Create(registerStackPad, args, "", ctor_bb);
+                args.push_back(entry.second);
+                CallInst::Create(registerStackPad->getFunctionType(), registerStackPad, args, "", ctor_bb);
             }
         }
         
         ReturnInst::Create(m.getContext(), ctor_bb);
         
         Function *main = m.getFunction("main");
-        if(main != NULL) {
+        if(main != nullptr) {
             main->setName("stabilizer_main");
         }
 
-        return true;
+        return PreservedAnalyses::none();
     }
     
     /**
@@ -238,15 +237,14 @@ struct StabilizerPass : public ModulePass {
         GlobalVariable *ctors = m.getGlobalVariable("llvm.global_ctors", false);
         
         // If not found, there aren't any constructors
-        if(ctors != NULL) {
+        if(ctors != nullptr) {
             // Get the constructor table initializer
             Constant* initializer = ctors->getInitializer();
-            if(isa<ConstantArray>(initializer)) {
-                ConstantArray* table = dyn_cast<ConstantArray>(initializer);
+            if(auto* table = dyn_cast<ConstantArray>(initializer)) {
 
                 // Get each entry in the table
-                for(ConstantArray::op_iterator i = table->op_begin(); i != table->op_end(); i++) {
-                    ConstantStruct* entry = dyn_cast<ConstantStruct>(i->get());
+                for(unsigned i = 0; i < table->getNumOperands(); ++i) {
+                    ConstantStruct* entry = dyn_cast<ConstantStruct>(table->getOperand(i));
                     Constant* f = entry->getOperand(1);
                     result.push_back(f);
                 }
@@ -274,10 +272,10 @@ struct StabilizerPass : public ModulePass {
 
         // Constructor function type
         FunctionType* ctor_fn_t = FunctionType::get(void_t, false);
-        PointerType* ctor_fn_p_t = PointerType::get(ctor_fn_t, 0);
-
+        PointerType* ctor_fn_p_t = PointerType::getUnqual(m.getContext());
+        
         // Constructor table entry type
-        StructType* ctor_entry_t = StructType::get(i32_t, ctor_fn_p_t, NULL);
+        StructType* ctor_entry_t = StructType::get(i32_t, ctor_fn_p_t, PointerType::getUnqual(m.getContext()));
 
         // Create constructor function
         Function* init = Function::Create(ctor_fn_t, Function::InternalLinkage, name, &m);
@@ -290,7 +288,7 @@ struct StabilizerPass : public ModulePass {
             ConstantStruct::get(ctor_entry_t,
                 ConstantInt::get(i32_t, 65535, false),
                 init,
-                NULL
+                Constant::getNullValue(PointerType::getUnqual(m.getContext()))
             )
         );
         
@@ -338,60 +336,220 @@ struct StabilizerPass : public ModulePass {
      * \arg f The function being transformed
      */
     void randomizeStack(Module& m, llvm::Function& f, GlobalVariable* stackPad) {
-        Function* stacksave = Intrinsic::getDeclaration(&m, Intrinsic::stacksave);
-        Function* stackrestore = Intrinsic::getDeclaration(&m, Intrinsic::stackrestore);
+        LLVMContext &ctx = m.getContext();
+        PointerType* ptrTy = PointerType::getUnqual(ctx);
+        Function *stacksave = Intrinsic::getDeclaration(&m, Intrinsic::stacksave, {ptrTy});
+        Function *stackrestore = Intrinsic::getDeclaration(&m, Intrinsic::stackrestore, {ptrTy});
+        Constant* nullPtr = ConstantPointerNull::get(ptrTy);
         
-        // Get all the callsites in this function
-        vector<CallInst*> calls;
-        
-        for(Function::iterator b_iter = f.begin(); b_iter != f.end(); b_iter++) {
-            BasicBlock& b = *b_iter;
-            
-            for(BasicBlock::iterator i_iter = b.begin(); i_iter != b.end(); i_iter++) {
-                Instruction& i = *i_iter;
-                
-                if(isa<CallInst>(&i)) {
-                    CallInst* c = dyn_cast<CallInst>(&i);
-                    calls.push_back(c);
+        vector<CallBase*> callSites;
+        for(auto &b : f) {
+            for(auto &i : b) {
+                if(auto* cb = dyn_cast<CallBase>(&i)) {
+                    if (isa<IntrinsicInst>(cb)) {
+                        continue;
+                    }
+                    if(Function* callee = cb->getCalledFunction()) {
+                        if(callee->isIntrinsic()) {
+                            continue;
+                        }
+                    }
+                    callSites.push_back(cb);
                 }
             }
         }
-        
-        //////////////////////////////////
-        
-        // Pad the stack before each callsite
-        
-        for(vector<CallInst*>::iterator c_iter = calls.begin(); c_iter != calls.end(); c_iter++) {
-            CallInst* c = *c_iter;
-            Instruction* next = c->getNextNode();
 
-			// Load the stack pad size and widen it to an intptr
-			Value* pad = new LoadInst(stackPad, "pad", c);
-            Value* wide_pad = ZExtInst::CreateZExtOrBitCast(pad, getIntptrType(m), "", c);
 
-            // Multiply the pad by the required stack alignment
+        DenseMap<BasicBlock*, PHINode*> restorePhis;
+        auto getRestorePhi = [&](BasicBlock* target) -> PHINode* {
+            auto found = restorePhis.find(target);
+            if(found != restorePhis.end()) {
+                return found->second;
+            }
+
+            Instruction* insertPt = target->getFirstNonPHI();
+            PHINode* phi = PHINode::Create(ptrTy, 0, "stabilizer.stack.restore.phi", insertPt);
+            for(BasicBlock* pred : predecessors(target)) {
+                phi->addIncoming(nullPtr, pred);
+            }
+
+            Instruction* restoreInsertPt = insertPt;
+            if(restoreInsertPt == nullptr) {
+                restoreInsertPt = target->getTerminator();
+            }
+            if(isa<LandingPadInst>(restoreInsertPt)) {
+                restoreInsertPt = restoreInsertPt->getNextNode();
+                if(restoreInsertPt == nullptr) {
+                    restoreInsertPt = target->getTerminator();
+                }
+            }
+
+            IRBuilder<> builder(restoreInsertPt);
+            CallInst* currentStack = builder.CreateCall(stacksave->getFunctionType(), stacksave, {}, "stabilizer.current_stack");
+            Value* needsRestore = builder.CreateICmpNE(phi, nullPtr, "stabilizer.needs_restore");
+            Value* targetPtr = builder.CreateSelect(needsRestore, static_cast<Value*>(phi), static_cast<Value*>(currentStack), "stabilizer.restore_target");
+            builder.CreateCall(stackrestore->getFunctionType(), stackrestore, {targetPtr});
+            restorePhis[target] = phi;
+            return phi;
+        };
+        
+        for(CallBase* callSite : callSites) {
+            Instruction* insertionPoint = cast<Instruction>(callSite);
+
+            Value* pad = new LoadInst(Type::getInt8Ty(ctx), stackPad, "pad", insertionPoint);
+            Value* wide_pad = new ZExtInst(pad, getIntptrType(m), "", insertionPoint);
+
             BinaryOperator* padSize = BinaryOperator::CreateNUWMul(
                 wide_pad,
                 getIntptr(m, 16, false),
                 "aligned_pad",
-                c
+                insertionPoint
             );
             
-            CallInst* oldStack = CallInst::Create(stacksave, "", c);
-            PtrToIntInst* oldStackInt = new PtrToIntInst(oldStack, getIntptrType(m), "", c);
+            CallInst* oldStack = CallInst::Create(stacksave->getFunctionType(), stacksave, "", insertionPoint);
+            PtrToIntInst* oldStackInt = new PtrToIntInst(oldStack, getIntptrType(m), "", insertionPoint);
 
-            BinaryOperator* newStackInt = BinaryOperator::CreateSub(oldStackInt, padSize, "", c);
-            IntToPtrInst* newStack = new IntToPtrInst(newStackInt, Type::getInt8PtrTy(m.getContext()), "", c);
+            BinaryOperator* newStackInt = BinaryOperator::CreateSub(oldStackInt, padSize, "", insertionPoint);
+            IntToPtrInst* newStack = new IntToPtrInst(newStackInt, ptrTy, "", insertionPoint);
 
-            vector<Value*> newStackArgs;
-            newStackArgs.push_back(newStack);
-            CallInst::Create(stackrestore, newStackArgs, "", c);
+            CallInst::Create(stackrestore->getFunctionType(), stackrestore, {newStack}, "", insertionPoint);
 
-            vector<Value*> oldStackArgs;
-            oldStackArgs.push_back(oldStack);
-            CallInst::Create(stackrestore, oldStackArgs, "", next);
+            auto restoreAfterCall = [&](Instruction* insertBefore) {
+                if(insertBefore == nullptr) {
+                    insertBefore = callSite->getParent()->getTerminator();
+                }
+                CallInst::Create(stackrestore->getFunctionType(), stackrestore, {oldStack}, "", insertBefore);
+            };
+
+            if(auto* callInst = dyn_cast<CallInst>(callSite)) {
+                restoreAfterCall(callInst->getNextNode());
+                continue;
+            }
+
+            auto assignRestoreValue = [&](BasicBlock* target) {
+                PHINode* phi = getRestorePhi(target);
+                int index = phi->getBasicBlockIndex(callSite->getParent());
+                if(index < 0) {
+                    phi->addIncoming(oldStack, callSite->getParent());
+                } else {
+                    phi->setIncomingValue(index, oldStack);
+                }
+            };
+
+            if(auto* invokeInst = dyn_cast<InvokeInst>(callSite)) {
+                assignRestoreValue(invokeInst->getNormalDest());
+                assignRestoreValue(invokeInst->getUnwindDest());
+            } else if(auto* callBrInst = dyn_cast<CallBrInst>(callSite)) {
+                for(unsigned succIdx = 0; succIdx < callBrInst->getNumSuccessors(); ++succIdx) {
+                    assignRestoreValue(callBrInst->getSuccessor(succIdx));
+                }
+            }
         }
     }
+
+static bool needsLiteralConstantMaterialization(Constant* C) {
+    if(C == nullptr) {
+        return false;
+    }
+
+    if(isa<UndefValue>(C) ||
+       isa<ConstantAggregateZero>(C) ||
+       isa<ConstantPointerNull>(C) ||
+       isa<PoisonValue>(C) ||
+       isa<ConstantInt>(C) ||
+       isa<ConstantFP>(C)) {
+        return false;
+    }
+
+    if(isa<ConstantArray>(C) ||
+       isa<ConstantStruct>(C) ||
+       isa<ConstantVector>(C) ||
+       isa<ConstantDataSequential>(C)) {
+        return true;
+    }
+
+    if(auto* expr = dyn_cast<ConstantExpr>(C)) {
+        for(const Use &U : expr->operands()) {
+            if(auto* nested = dyn_cast<Constant>(U.get())) {
+                if(needsLiteralConstantMaterialization(nested)) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+static void materializeLargeConstants(Function& F) {
+    vector<pair<Use*, Constant*>> pendingUses;
+    for(auto &BB : F) {
+        for(auto &I : BB) {
+            if(auto* phi = dyn_cast<PHINode>(&I)) {
+                for(Use &U : phi->operands()) {
+                    if(auto* C = dyn_cast<Constant>(U.get())) {
+                        if(needsLiteralConstantMaterialization(C)) {
+                            pendingUses.emplace_back(&U, C);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            for(Use &U : I.operands()) {
+                if(auto* C = dyn_cast<Constant>(U.get())) {
+                    if(needsLiteralConstantMaterialization(C)) {
+                        pendingUses.emplace_back(&U, C);
+                    }
+                }
+            }
+        }
+    }
+
+    if(pendingUses.empty()) {
+        return;
+    }
+
+    Module& Mod = *F.getParent();
+    BasicBlock& entry = F.getEntryBlock();
+    Instruction* insertPoint = entry.getFirstNonPHI();
+    if(insertPoint == nullptr) {
+        insertPoint = entry.getTerminator();
+    }
+    IRBuilder<> literalBuilder(insertPoint);
+    DenseMap<Constant*, Value*> replacements;
+
+    auto getOrCreateReplacement = [&](Constant* C) -> Value* {
+        auto it = replacements.find(C);
+        if(it != replacements.end()) {
+            return it->second;
+        }
+
+        auto literalName = (F.getName() + ".literal").str();
+        GlobalVariable* literal = new GlobalVariable(
+            Mod,
+            C->getType(),
+            true,
+            GlobalValue::InternalLinkage,
+            C,
+            literalName);
+        literal->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+        MaybeAlign prefAlign = Mod.getDataLayout().getPrefTypeAlign(C->getType());
+        if(prefAlign) {
+            literal->setAlignment(*prefAlign);
+        }
+
+        LoadInst* load = literalBuilder.CreateLoad(C->getType(), literal, "stabilizer.literal");
+        replacements[C] = load;
+        return load;
+    };
+
+    for(auto &work : pendingUses) {
+        Use* use = work.first;
+        Constant* C = work.second;
+        use->set(getOrCreateReplacement(C));
+    }
+}
     
     /**
      * \brief Transform a function to reference globals only through a relocation table.
@@ -400,31 +558,13 @@ struct StabilizerPass : public ModulePass {
      * \arg f The function being transformed
      * \returns The arguments to be passed to stabilizer_register_function
      */
-    vector<Value*> randomizeCode(Module& m, Function& f) {
-        // Add a dummy function used to compute the size
-        Function* next = Function::Create(
-            FunctionType::get(Type::getVoidTy(m.getContext()), false),
-            GlobalValue::InternalLinkage,
-            "stabilizer.dummy."+f.getName()
-        );
-        
-        // Align the following function to a cache line to avoid mixing code/data in cache
-        next->setAlignment(ALIGN);
-        
-        // Put a basic block and return instruction into the dummy function
-        BasicBlock *dummy_block = BasicBlock::Create(m.getContext(), "", next);
-        ReturnInst::Create(m.getContext(), dummy_block);
+vector<Value*> randomizeCode(Module& m, Function& f) {
+        materializeLargeConstants(f);
+        materializeLargeConstants(f);
 
-        // Ensure the dummy is placed immediately after our function
-        if(f.getNextNode() == NULL) {
-            m.getFunctionList().setNext(&f, next);
-            m.getFunctionList().addNodeToList(next);
-        } else {
-            m.getFunctionList().setNext(next, f.getNextNode());
-            m.getFunctionList().setNext(&f, next);
-            m.getFunctionList().addNodeToList(next);
-        }
-        
+        LLVMContext &ctx = m.getContext();
+        PointerType* voidPtrTy = PointerType::getUnqual(m.getContext());
+        // Add a dummy function used to compute the size
         // Remove stack protection (creates implicit global references)
         f.removeFnAttr(Attribute::StackProtect);
         f.removeFnAttr(Attribute::StackProtectReq);
@@ -440,64 +580,75 @@ struct StabilizerPass : public ModulePass {
             extractFloatOperations(f);
         //}
         
+        Function* boundary = Function::Create(
+            FunctionType::get(Type::getVoidTy(m.getContext()), false),
+            GlobalValue::InternalLinkage,
+            "stabilizer.boundary."+f.getName()
+        );
+        boundary->setAlignment(Align(ALIGN));
+        BasicBlock *boundaryBlock = BasicBlock::Create(m.getContext(), "", boundary);
+        ReturnInst::Create(m.getContext(), boundaryBlock);
+        auto insertPos = f.getIterator();
+        ++insertPos;
+        m.getFunctionList().insert(insertPos, boundary);
+        Constant* boundaryPtr = ConstantExpr::getBitCast(boundary, voidPtrTy);
+
         // Collect all the referenced global values in this function
         map<Constant*, set<Use*> > references = findPCRelativeUsesIn(f);
         
         if(references.size() > 0) {
-            // Build an ordered list of referenced constants
+            bool logReferences = (f.getName() == "main" || f.getName() == "stabilizer_main");
+            StructType* relocationTableType = StructType::create(m.getContext(), (f.getName()+".relocation_table_t").str());
+            PointerType* relocationTablePtrTy = PointerType::getUnqual(relocationTableType);
+
             vector<Constant*> referencedValues;
-            for(map<Constant*, set<Use*> >::iterator p_iter = references.begin();
-                p_iter != references.end(); p_iter++) {
-                
-                pair<Constant*, set<Use*> > p = *p_iter;
-                referencedValues.push_back(p.first);
-            }
-            
-            // Create an ordered list of types for the referenced constants
             vector<Type*> referencedTypes;
-            for(vector<Constant*>::iterator c_iter = referencedValues.begin();
-                c_iter != referencedValues.end(); c_iter++) {
-                
-                Constant* c = *c_iter;
-                referencedTypes.push_back(c->getType());
+            DenseMap<Constant*, unsigned> referenceIndices;
+
+            for(auto &p : references) {
+                Constant* value = p.first;
+                if(logReferences) {
+                    errs() << "[stabilize] reference in " << f.getName() << ": ";
+                    value->print(errs());
+                    errs() << "\n";
+                }
+                referenceIndices[value] = referencedValues.size();
+                referencedValues.push_back(value);
+                referencedTypes.push_back(value->getType());
             }
 
-            // Create the struct type for the relocation table
-            StructType* relocationTableType = StructType::create(
-                referencedTypes, 
-                (f.getName()+".relocation_table_t").str(), 
-                false
-            );
-            
-            // Create the relocation table global variable
+            relocationTableType->setBody(referencedTypes, false);
+
             GlobalVariable* relocationTable = new GlobalVariable(
-                m, 
-                relocationTableType, 
-                false,  // No, the table needs to be mutable
-                GlobalVariable::InternalLinkage, 
+                m,
+                relocationTableType,
+                false,
+                GlobalValue::InternalLinkage,
                 ConstantStruct::get(relocationTableType, referencedValues),
                 f.getName()+".relocation_table"
             );
-            
-            // The referenced relocation table may not be the global one (for PC-relative data)
-            Constant* actualRelocationTable = relocationTable;
-            
-            // Cast next-function pointer to the relocation table type for PC-relative data
-            if(isDataPCRelative(m)) {
-                Type* ptr = PointerType::get(relocationTableType, 0);
-                actualRelocationTable = ConstantExpr::getPointerCast(next, ptr);
-            }
-            
-            // Rewrite global references to use the relocation table
-            size_t index = 0;
-            for(vector<Constant*>::iterator c_iter = referencedValues.begin(); c_iter != referencedValues.end(); c_iter++) {
-                Constant* c = *c_iter;
+
+            Constant* codeLimit = boundaryPtr;
+            Value* tableBaseValue = nullptr;
+            {
+                IRBuilder<> entryBuilder(&*f.getEntryBlock().getFirstInsertionPt());
+                FunctionType* fnType = FunctionType::get(voidPtrTy, false);
                 
-                for(set<Use*>::iterator u_iter = references[c].begin();
-                    u_iter != references[c].end(); u_iter++) {
-                    
-                    Use* u = *u_iter;
-                    
+                // Create a magic number constant that we'll patch at runtime
+                // Magic number: 0x57ab1122334457ab
+                Constant* magic = ConstantInt::get(Type::getInt64Ty(ctx), 0x57ab1122334457abULL);
+                Value* funcPtr = ConstantExpr::getIntToPtr(magic, PointerType::getUnqual(ctx));
+                
+                CallInst* tableBaseRaw = entryBuilder.CreateCall(fnType, funcPtr, {}, "stabilizer.table.base.raw");
+                tableBaseValue = entryBuilder.CreateBitCast(tableBaseRaw, relocationTablePtrTy, "stabilizer.table.base");
+            }
+
+            for(auto &p : references) {
+                Constant* c = p.first;
+                auto found = referenceIndices.find(c);
+                assert(found != referenceIndices.end() && "Missing relocation table entry for constant");
+                uint32_t index = found->second;
+                for(Use* u : p.second) {
                     Instruction* insertion_point = dyn_cast<Instruction>(u->getUser());
                     assert(insertion_point != NULL && "Only instruction uses can be rewritten");
                     
@@ -507,18 +658,20 @@ struct StabilizerPass : public ModulePass {
                         insertion_point = incoming->getTerminator();
                     }
                     
-                    // Get the relocation table slot
-                    vector<Constant*> indices;
-                    indices.push_back(Constant::getIntegerValue(Type::getInt32Ty(m.getContext()), APInt(32, 0, false)));
-                    indices.push_back(Constant::getIntegerValue(Type::getInt32Ty(m.getContext()), APInt(32, (uint64_t)index, false)));
+                    vector<Value*> indices;
+                    indices.push_back(ConstantInt::get(Type::getInt32Ty(ctx), 0));
+                    indices.push_back(ConstantInt::get(Type::getInt32Ty(ctx), index));
                     
-                    Constant* slot = ConstantExpr::getGetElementPtr(
-                        actualRelocationTable,
+                    Value* slot = GetElementPtrInst::Create(
+                        relocationTableType,
+                        tableBaseValue,
                         indices,
-                        true    // Yes, it is in bounds
+                        "",
+                        insertion_point
                     );
                     
                     Value* loaded = new LoadInst(
+                        c->getType(),
                         slot, 
                         c->getName()+".indirect", 
                         insertion_point
@@ -526,26 +679,17 @@ struct StabilizerPass : public ModulePass {
                     
                     u->set(loaded);
                 }
-                
-                index++;
             }
-            
+
             vector<Value*> args;
         
-            // The function base
-            args.push_back(ConstantExpr::getPointerCast(&f, Type::getInt8PtrTy(m.getContext())));
-
-            // The function limit
-            args.push_back(ConstantExpr::getPointerCast(next, Type::getInt8PtrTy(m.getContext())));
-
-            // The global relocation table
-            args.push_back(ConstantExpr::getPointerCast(relocationTable, Type::getInt8PtrTy(m.getContext())));
-            
-            // The size of the relocation table
-            args.push_back(ConstantExpr::getIntegerCast(ConstantExpr::getSizeOf(relocationTableType), Type::getInt32Ty(m.getContext()), false));
-            
-            // If true, the function uses an adjacent relocation table, not the global
-            args.push_back(Constant::getIntegerValue(Type::getInt1Ty(m.getContext()), APInt(1, isDataPCRelative(m), false)));
+            args.push_back(&f);
+            args.push_back(codeLimit);
+            args.push_back(relocationTable);
+            uint64_t tableSize = m.getDataLayout().getTypeAllocSize(relocationTableType);
+            args.push_back(ConstantInt::get(Type::getInt32Ty(ctx), tableSize));
+            args.push_back(ConstantInt::get(Type::getInt1Ty(ctx), 1));
+            args.push_back(Constant::getNullValue(voidPtrTy));
         
             return args;
             
@@ -553,19 +697,20 @@ struct StabilizerPass : public ModulePass {
             vector<Value*> args;
             
             // The function base
-            args.push_back(ConstantExpr::getPointerCast(&f, Type::getInt8PtrTy(m.getContext())));
+            args.push_back(&f);
             
             // The function limit
-            args.push_back(ConstantExpr::getPointerCast(next, Type::getInt8PtrTy(m.getContext())));
+            args.push_back(boundaryPtr);
             
             // The global relocation table (null)
-            args.push_back(Constant::getNullValue(Type::getInt8PtrTy(m.getContext())));
+            args.push_back(Constant::getNullValue(PointerType::getUnqual(m.getContext())));
             
             // The size of the relocation table (0)
             args.push_back(Constant::getIntegerValue(Type::getInt32Ty(m.getContext()), APInt(32, 0, false)));
             
             // PC-relative data?  Doesn't matter
             args.push_back(Constant::getIntegerValue(Type::getInt1Ty(m.getContext()), APInt(1, 0, false)));
+            args.push_back(Constant::getNullValue(voidPtrTy));
             
             return args;
         }
@@ -578,7 +723,7 @@ struct StabilizerPass : public ModulePass {
         if(isa<Function>(v)) {
             Function* f = dyn_cast<Function>(v);
             
-            if(f->isIntrinsic() || f->getName().equals("__gxx_personality_v0")) {
+            if(f->isIntrinsic() || f->getName() == "__gxx_personality_v0") {
                 return false;
             } else {
                 return true;
@@ -587,11 +732,26 @@ struct StabilizerPass : public ModulePass {
         } else if(isa<GlobalValue>(v)) {
             return true;
         
+        } else if(isa<BlockAddress>(v)) {
+            return true;
+        
         } else if(isa<ConstantExpr>(v)) {
             ConstantExpr* e = dyn_cast<ConstantExpr>(v);
             
-            for(ConstantExpr::op_iterator use = e->op_begin(); use != e->op_end(); use++) {
-                if(containsGlobal(use->get())) {
+            for(unsigned i=0; i<e->getNumOperands(); ++i) {
+                if(containsGlobal(e->getOperand(i))) {
+                    return true;
+                }
+            }
+        } else if(auto* agg = dyn_cast<ConstantAggregate>(v)) {
+            for(unsigned i=0; i<agg->getNumOperands(); ++i) {
+                if(containsGlobal(agg->getOperand(i))) {
+                    return true;
+                }
+            }
+        } else if(auto* dataSeq = dyn_cast<ConstantDataSequential>(v)) {
+            for(unsigned i=0; i<dataSeq->getNumElements(); ++i) {
+                if(containsGlobal(dataSeq->getElementAsConstant(i))) {
                     return true;
                 }
             }
@@ -609,13 +769,11 @@ struct StabilizerPass : public ModulePass {
     map<Constant*, set<Use*> > findPCRelativeUsesIn(Function& f) {
         map<Constant*, set<Use*> > result;
         
-        for(Function::iterator b = f.begin(); b != f.end(); b++) {
-            for(BasicBlock::iterator i_iter = b->begin(); i_iter != b->end(); i_iter++) {
-                Instruction* i = &*i_iter;
+        for(auto &b : f) {
+            for(auto &i : b) {
                 
-                if(isa<PHINode>(i)) {
-                    PHINode* phi = dyn_cast<PHINode>(i);
-                    for(size_t index = 0; index < phi->getNumIncomingValues(); index++) {
+                if(auto* phi = dyn_cast<PHINode>(&i)) {
+                    for(unsigned index = 0; index < phi->getNumIncomingValues(); index++) {
                         Value* operand = phi->getIncomingValue(index);
                         
                         if(isa<Constant>(operand) && containsGlobal(operand)) {
@@ -633,15 +791,15 @@ struct StabilizerPass : public ModulePass {
                 } else {
                     // TODO: only process control flow targets on platforms that don't have PC-relative data addressing
                     
-                    for(Instruction::op_iterator use = i->op_begin(); use != i->op_end(); use++) {
-                        Value* operand = use->get();
+                    for(Use &use : i.operands()) {
+                        Value* operand = use.get();
                         if(isa<Constant>(operand) && containsGlobal(operand)) {
                             Constant* c = dyn_cast<Constant>(operand);
                             if(result.find(c) == result.end()) {
                                 result[c] = set<Use*>();
                             }
                             
-                            result[c].insert(use);
+                            result[c].insert(&use);
                         }
                     }
                 }
@@ -663,10 +821,8 @@ struct StabilizerPass : public ModulePass {
     void extractFloatOperations(Function& f) {
         Module& m = *f.getParent();
         vector<Instruction*> to_delete;
-        for(Function::iterator b_iter = f.begin(); b_iter != f.end(); b_iter++) {
-            BasicBlock& b = *b_iter;
-            for(BasicBlock::iterator i_iter = b.begin(); i_iter != b.end(); i_iter++) {
-                Instruction& i = *i_iter;
+        for(auto &b : f) {
+            for(auto &i : b) {
                 
                 if(isa<FPToSIInst>(&i)
                     || isa<FPToUIInst>(&i)
@@ -674,18 +830,18 @@ struct StabilizerPass : public ModulePass {
                     || isa<UIToFPInst>(&i)
                     || (isa<FPTruncInst>(&i) && getPlatform(m) == PowerPC)) {
                     
-                    Function* f = getFloatConversion(m, i.getOpcode(), i.getOperand(0)->getType(), i.getType());
+                    Function* func = getFloatConversion(m, i.getOpcode(), i.getOperand(0)->getType(), i.getType());
                     
                     vector<Value*> args;
                     args.push_back(i.getOperand(0));
-                    CallInst *ci = CallInst::Create(f, ArrayRef<Value*>(args), "", &i);
+                    CallInst *ci = CallInst::Create(func->getFunctionType(), func, args, "", &i);
                     
                     i.replaceAllUsesWith(ci);
                     to_delete.push_back(&i);
                     
                 } else {
-                    for(Instruction::op_iterator op_iter = i.op_begin(); op_iter != i.op_end(); op_iter++) {
-                        Value* op = *op_iter;
+                    for(Use &use : i.operands()) {
+                        Value* op = use.get();
                         
                         if(isa<Constant>(op)) {
                             Constant* c = dyn_cast<Constant>(op);
@@ -699,13 +855,13 @@ struct StabilizerPass : public ModulePass {
                                 
                                 if(isa<PHINode>(insertion_point)) {
                                     PHINode* phi = dyn_cast<PHINode>(insertion_point);
-                                    BasicBlock *incoming = phi->getIncomingBlock(*op_iter);
+                                    BasicBlock *incoming = phi->getIncomingBlock(use);
                                     insertion_point = incoming->getTerminator();
                                 }
 
-                                LoadInst* load = new LoadInst(g, "fconst.load", insertion_point);
+                                LoadInst* load = new LoadInst(t, g, "fconst.load", insertion_point);
 
-                                op_iter->set(load);
+                                use.set(load);
                             }
                         }
                     }
@@ -713,10 +869,7 @@ struct StabilizerPass : public ModulePass {
             }
         }
 
-        for(vector<Instruction*>::iterator i_iter = to_delete.begin();
-            i_iter != to_delete.end(); i_iter++) {
-            
-            Instruction* i = *i_iter;
+        for(auto* i : to_delete) {
             i->eraseFromParent();
         }
     }
@@ -731,11 +884,11 @@ struct StabilizerPass : public ModulePass {
             return true;
             
         } else if(isa<ConstantExpr>(c)) {
+            ConstantExpr* e = dyn_cast<ConstantExpr>(c);
             
-            for(Constant::op_iterator op_iter = c->op_begin(); op_iter != c->op_end(); op_iter++) {
-                Constant* op = dyn_cast<Constant>(op_iter->get());
+            for(unsigned i=0; i<e->getNumOperands(); ++i) {
                 
-                if(containsConstantFloat(op)) {
+                if(containsConstantFloat(dyn_cast<Constant>(e->getOperand(i)))) {
                     return true;
                 }
             }
@@ -901,16 +1054,17 @@ struct StabilizerPass : public ModulePass {
      */
     void declareRuntimeFunctions(Module& m) {
         // Declare the register_function runtime function
-        vector<Type*> register_function_params;
-        register_function_params.push_back(Type::getInt8PtrTy(m.getContext()));
-        register_function_params.push_back(Type::getInt8PtrTy(m.getContext()));
-        register_function_params.push_back(Type::getInt8PtrTy(m.getContext()));
-        register_function_params.push_back(Type::getInt32Ty(m.getContext()));
-        register_function_params.push_back(Type::getInt1Ty(m.getContext()));
-		register_function_params.push_back(PointerType::get(Type::getInt8Ty(m.getContext()), 0));
+        Type* voidTy = Type::getVoidTy(m.getContext());
+        Type* ptrTy = PointerType::getUnqual(m.getContext());
+        Type* int32Ty = Type::getInt32Ty(m.getContext());
+        Type* int1Ty = Type::getInt1Ty(m.getContext());
+        
+        vector<Type*> register_function_params = {ptrTy, ptrTy, ptrTy, int32Ty, int1Ty, ptrTy, ptrTy};
+        
+        FunctionType* regFuncType = FunctionType::get(voidTy, register_function_params, false);
         
         registerFunction = Function::Create(
-             FunctionType::get(Type::getVoidTy(m.getContext()), register_function_params, false),
+             regFuncType,
              Function::ExternalLinkage,
              "stabilizer_register_function",
              &m
@@ -919,8 +1073,10 @@ struct StabilizerPass : public ModulePass {
         registerFunction->addFnAttr(Attribute::NonLazyBind);
         
         // Declare the register_constructor runtime function
+        vector<Type*> regCtorParams = {ptrTy};
+        FunctionType* regCtorType = FunctionType::get(voidTy, regCtorParams, false);
         registerConstructor = Function::Create(
-            TypeBuilder<void(void()), true>::get(m.getContext()),
+            regCtorType,
             Function::ExternalLinkage,
             "stabilizer_register_constructor",
             &m
@@ -929,11 +1085,11 @@ struct StabilizerPass : public ModulePass {
         registerConstructor->addFnAttr(Attribute::NonLazyBind);
         
         // Declare the register_stack_table runtime function
-        vector<Type*> params;
-		params.push_back(PointerType::get(Type::getInt8Ty(m.getContext()), 0));
+        vector<Type*> stackPadParams = {ptrTy};
+        FunctionType* regStackPadType = FunctionType::get(voidTy, stackPadParams, false);
         
         registerStackPad = Function::Create(
-            FunctionType::get(Type::getVoidTy(m.getContext()), params, false),
+            regStackPadType,
             Function::ExternalLinkage,
             "stabilizer_register_stack_pad",
             &m
@@ -943,5 +1099,22 @@ struct StabilizerPass : public ModulePass {
     }
 };
 
-char StabilizerPass::ID = 0;
-static RegisterPass<StabilizerPass> X("stabilize", "Add support for runtime randomization of program layout");
+extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
+llvmGetPassPluginInfo() {
+  return {LLVM_PLUGIN_API_VERSION, "Stabilizer", LLVM_VERSION_STRING,
+          [](PassBuilder &PB) {
+            PB.registerPipelineParsingCallback(
+                [](StringRef Name, ModulePassManager &MPM,
+                   ArrayRef<PassBuilder::PipelineElement>) {
+                  if (Name == "stabilize") {
+                    MPM.addPass(StabilizerPassNew());
+                    return true;
+                  }
+                  if (Name == "lower-intrinsics") {
+                    MPM.addPass(LowerIntrinsicsPass());
+                    return true;
+                  }
+                  return false;
+                });
+          }};
+}

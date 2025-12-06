@@ -1,4 +1,4 @@
-ROOT = ../..
+ROOT = ../../..
 TARGETS = hello
 
 build:: hello

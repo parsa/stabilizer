@@ -10,17 +10,17 @@ libstabilizer.dylib
 runtime/obj
 pass/obj
 
-tests/HelloWorld/obj
-tests/HelloWorld/hello
+tests/**/obj/
+tests/**/obj
 
-tests/libquantum/obj
-tests/libquantum/libquantum
+tests/**/hello_world/hello
+tests/**/bzip2/bzip2
+tests/**/libquantum/libquantum
+tests/**/perlbench/perlbench
+tests/runtime/**/*_smoke
 
-tests/bzip2/obj
-tests/bzip2/bzip2
-
-tests/perlbench/obj
-tests/perlbench/perlbench
-tests/perlbench/validate
+tests/**/*.ll
+tests/**/obj/*.ll
 
 nbproject
+.vscode/

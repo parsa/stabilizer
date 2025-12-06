@@ -5,10 +5,12 @@ PLATFORM ?= $(OS).$(CPU)
 TARGET_PLATFORM ?= $(PLATFORM)
 
 # Set the default compilers and flags
+LLVM_CONFIG ?= llvm-config
 CC = clang
 CXX = clang++
 CFLAGS ?= -Os
 CXXFLAGS ?= $(CFLAGS)
+LDFLAGS ?=
 
 # Include platform-specific rules
 ifneq ($(CROSS_TARGET),)
@@ -93,7 +95,7 @@ obj/%.o:: %.C Makefile $(ROOT)/common.mk $(INCLUDE_DIRS) $(INCLUDES)
 
 $(SHARED_LIB_TARGETS):: $(OBJS) $(INCLUDE_DIRS) $(INCLUDES) Makefile $(ROOT)/common.mk
 	@echo $(INDENT)[$(notdir $(firstword $(CXXLIB)))] Linking $@ for $(if $(DEBUG),Debug,Release) build
-	@$(CXXLIB) $(CXXFLAGS) $(INCFLAGS) $(OBJS) -o $@ $(LIBFLAGS)
+	@$(CXXLIB) $(CXXFLAGS) $(INCFLAGS) $(OBJS) -o $@ $(LDFLAGS) $(LIBFLAGS)
 
 $(STATIC_LIB_TARGETS):: $(OBJS) $(INCLUDE_DIRS) $(INCLUDES) Makefile $(ROOT)/common.mk
 	@echo $(INDENT)[ar] Linking $@ for $(if $(DEBUG),Debug,Release) build
@@ -101,7 +103,7 @@ $(STATIC_LIB_TARGETS):: $(OBJS) $(INCLUDE_DIRS) $(INCLUDES) Makefile $(ROOT)/com
 
 $(OTHER_TARGETS):: $(OBJS) $(INCLUDE_DIRS) $(INCLUDES) Makefile $(ROOT)/common.mk
 	@echo $(INDENT)[$(notdir $(firstword $(CXX)))] Linking $@ for $(if $(DEBUG),Debug,Release) build
-	@$(CXX) $(CXXFLAGS) $(if $(DEBUG),-g,-DNDEBUG) $(INCFLAGS) $(OBJS) -o $@ $(LIBFLAGS)
+	@$(CXX) $(CXXFLAGS) $(if $(DEBUG),-g,-DNDEBUG) $(INCFLAGS) $(OBJS) -o $@ $(LDFLAGS) $(LIBFLAGS)
 
 $(RECURSIVE_TARGETS)::
 	@for dir in $(DIRS); do \

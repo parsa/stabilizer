@@ -1,4 +1,4 @@
-ROOT = ../..
+ROOT = ../../../../
 TARGETS = bzip2
 
 build:: bzip2

@@ -36,16 +36,16 @@ static void flush_icache(void* begin, size_t size) {
 
 static inline uint8_t getRandomByte() {
     static RandomNumberGenerator _rng;
-    static uint8_t _randCount = 0;
+    static uint8_t _randCount = sizeof(int);
     
     static union {
         uint8_t _rands[sizeof(int)];
         int _bigRand;
     };
     
-    if(_randCount == sizeof(int)) {
+    if(_randCount >= sizeof(int)) {
         _bigRand = _rng.next();
-        _randCount = sizeof(int);
+        _randCount = 0;
     }
     
     uint8_t r = _rands[_randCount];

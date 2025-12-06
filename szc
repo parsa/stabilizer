@@ -1,10 +1,9 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import os
 import sys
 import random
 import argparse
-from distutils import util
 
 parser = argparse.ArgumentParser(description="Stabilizer Compiler Driver")
 
@@ -15,7 +14,6 @@ parser.add_argument('-R', action='append', choices=['code', 'heap', 'stack', 'li
 parser.add_argument('-v', action='store_true')
 parser.add_argument('-lang', choices=['c', 'c++', 'fortran'])
 parser.add_argument('-platform', choices=['auto', 'linux', 'osx'], default='auto')
-parser.add_argument('-frontend', choices=['gcc', 'clang'], default='gcc')
 
 # Compiler pass-through arguments
 parser.add_argument('-c', action='store_true')
@@ -33,12 +31,12 @@ parser.add_argument('input', nargs='+')
 args = parser.parse_args()
 
 def getPlatform():
-	if util.get_platform().startswith('macosx'):
+	if sys.platform.startswith('darwin'):
 		return 'osx'
-	elif util.get_platform().startswith('linux'):
+	elif sys.platform.startswith('linux'):
 		return 'linux'
 	else:
-		print 'Unsupported platform'
+		print('Unsupported platform')
 		exit(2)
 
 def arg(flag, values):
@@ -62,19 +60,20 @@ STABILIZER_HOME = os.path.dirname(__file__)
 
 if args.platform == 'osx':
 	LIBSUFFIX = 'dylib'
-	args.frontend = 'clang'
 else:
 	LIBSUFFIX = 'so'
 
 opts = []
+passes = []
 
 args.l.append('stdc++')
 #args.v = True
 
+
 if 'code' in args.R:
-	opts.append('lower-intrinsics')
-	opts.append('lowerswitch')
-	opts.append('lowerinvoke')
+	passes.append('lower-intrinsics')
+	passes.append('function(lower-switch)')
+	passes.append('lower-invoke')
 	opts.append('stabilize-code')
 
 if 'stack' in args.R:
@@ -86,7 +85,7 @@ if 'heap' in args.R:
 if 'code' in args.R or 'heap' in args.R or 'stack' in args.R:
 	args.L.append(STABILIZER_HOME)
 	args.l.append('stabilizer')
-	opts.append('stabilize')
+	passes.append('stabilize')
 
 def compile(input):
 	if input.endswith('.o'):
@@ -94,21 +93,14 @@ def compile(input):
 	
 	needsAssembly = False
 	
-	if args.lang == 'fortran':
-		cmd = 'gfortran -O0 -fplugin=dragonegg -S -fplugin-arg-dragonegg-emit-ir'
-		cmd += arg('o ', args.o+'.s')
-		needsAssembly = True
-		
-	elif args.frontend == 'gcc':
-		cmd = 'gcc -O0 -fplugin=dragonegg -S -fplugin-arg-dragonegg-emit-ir'
-		cmd += arg('o ', args.o+'.s')
-		needsAssembly = True
-	
+	if args.lang == 'fortran' or input.endswith('.f') or input.endswith('.f90'):
+		# Fortran uses flang-new directly for everything
+		cmd = 'flang-new -c -emit-llvm'
 	else:
-		cmd = 'clang -O0 -c -emit-llvm'
-		cmd += arg('o ', args.o)
-	
-	cmd += arg('O', 0)
+		# Use -O0 but disable optnone so lowering passes can run
+		cmd = 'clang -O0 -Xclang -disable-O0-optnone -c -emit-llvm'
+
+	cmd += arg('o ', args.o)
 	cmd += arg('g', args.g)
 	cmd += arg('I', args.I)
 	cmd += arg('f', args.f)
@@ -117,13 +109,14 @@ def compile(input):
 	cmd += ' '+input
 	
 	if args.v:
-		print cmd
-	os.system(cmd)
+		print(cmd)
+	if os.system(cmd) != 0:
+		exit(1)
 	
 	if needsAssembly:
 		cmd = 'llvm-as -o ' + args.o + ' ' + args.o + '.s'
 		if args.v:
-			print cmd
+			print(cmd)
 		os.system(cmd)
 	
 	return args.o
@@ -137,7 +130,7 @@ def link(inputs):
 	cmd += ' '.join(inputs)
 
 	if args.v:
-		print cmd
+		print(cmd)
 	os.system(cmd)
 	return args.o + '.bc'
 
@@ -145,33 +138,49 @@ def transform(input):
 	cmd = 'opt -o ' + args.o + '.opt.bc'
 	cmd += ' ' + input
 	
-	if args.O > 0:
-		cmd += ' -O'+str(args.O)
+	#if args.O > 0:
+	#	cmd += ' -O'+str(args.O)
 	
-	cmd += ' -load='+STABILIZER_HOME+'/LLVMStabilizer.'+LIBSUFFIX
+	cmd += ' -load-pass-plugin='+STABILIZER_HOME+'/LLVMStabilizer.'+LIBSUFFIX
+	
+	pipeline = []
+	# Run optimization first, then lowering passes to clean up switch statements
+	if args.O > 0:
+		pipeline.append('default<O'+str(args.O)+'>')
+	
+	# Add lowering passes after optimization to ensure switches are lowered
+	pipeline.extend(passes)
+	
+	# Run lower-switch again after optimization to catch any new switches
+	if 'code' in args.R:
+		pipeline.append('function(lower-switch)')
+	
+	if len(pipeline) > 0:
+		cmd += ' -passes="' + ','.join(pipeline) + '"'
 	
 	cmd += arg('', opts)
 	
 	if args.v:
-		print cmd
+		print(cmd)
 	os.system(cmd)
 	return args.o + '.opt.bc'
 
 def codegen(input):
-	cmd = 'llc -O0 -relocation-model=pic -disable-fp-elim'
+	cmd = 'llc -O0 -relocation-model=pic -frame-pointer=all'
 	cmd += ' -o ' + args.o + '.s'
 	cmd += ' ' + input
 	
 	if args.v:
-		print cmd
+		print(cmd)
 	os.system(cmd)
 	
 	if args.lang == 'fortran':
-		cmd = 'gfortran'
+		cmd = 'flang-new'
+		cmd += ' '
 	else:
-		cmd = args.frontend
+		cmd = 'clang -fno-pie -no-pie '
 	
-	cmd += ' ' + args.o + '.s'
+	cmd += args.o + '.s'
 	
 	cmd += arg('o ', args.o)
 	cmd += arg('f', args.f)
@@ -179,13 +188,13 @@ def codegen(input):
 	cmd += arg('l', args.l)
 	
 	if args.v:
-		print cmd
+		print(cmd)
 	os.system(cmd)
 	
 	return args.o
 
 # Build up program arguments
-object_files = map(compile, args.input)
+object_files = list(map(compile, args.input))
 
 if not args.c:
 	linked = link(object_files)

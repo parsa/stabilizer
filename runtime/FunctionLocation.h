@@ -79,12 +79,34 @@ public:
     void* getBase() {
         return _memory.base();
     }
+
+    void* getTableBase() {
+        if(_f->_table.size() == 0) {
+            return NULL;
+        }
+        if(_f->_tableAdjacent) {
+            return _memory.offsetIn(_f->getCodeSize());
+        }
+        if(_f->_tableSlot != nullptr) {
+            return *_f->_tableSlot;
+        }
+        return _f->_table.base();
+    }
+
+    size_t getTableSize() {
+        return _f->_table.size();
+    }
     
     static void mark(void* p) {
         FunctionLocation* l = find(p);
         if(l != NULL) {
             l->_marked = true;
         }
+    }
+
+public:
+    static FunctionLocation* locate(void* p) {
+        return find(p);
     }
     
     static void sweep() {

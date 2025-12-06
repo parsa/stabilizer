@@ -95,6 +95,16 @@ public:
         ABORT("Frame pointer not available on current target");
     }
     
+    inline void*& rax() {
+        _LINUX(_AnyX86(return *(void**)&_c->uc_mcontext.gregs[REG_RAX]));
+        ABORT("RAX not available on current target");
+    }
+    
+    inline void*& rdi() {
+        _LINUX(_AnyX86(return *(void**)&_c->uc_mcontext.gregs[REG_RDI]));
+        ABORT("RDI not available on current target");
+    }
+    
     /**
      * Get an iterator to walk the context's stack
      * \returns A Stack iterator
