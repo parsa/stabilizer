@@ -118,16 +118,6 @@ void stabilizer_init_text_relocations(const set<Function*>& functions) {
     }
 
     Elf64_Shdr* sh = (Elf64_Shdr*)(bytes + eh->e_shoff);
-    if(eh->e_shstrndx == SHN_UNDEF || eh->e_shstrndx >= eh->e_shnum) {
-        munmap(file, st.st_size);
-        return;
-    }
-    if(sh[eh->e_shstrndx].sh_offset + sh[eh->e_shstrndx].sh_size > (size_t)st.st_size) {
-        munmap(file, st.st_size);
-        return;
-    }
-
-    const char* shstr = (const char*)(bytes + sh[eh->e_shstrndx].sh_offset);
 
     uintptr_t load_bias = 0;
     if(eh->e_type == ET_DYN) {
@@ -156,6 +146,10 @@ void stabilizer_init_text_relocations(const set<Function*>& functions) {
         return NULL;
     };
 
+    size_t exec_rela_sections = 0;
+    size_t exec_rela_entries = 0;
+    size_t supported_relocs_added = 0;
+
     // Scan all SHT_RELA sections that target executable sections.
     for(uint16_t i = 0; i < eh->e_shnum; i++) {
         if(sh[i].sh_type != SHT_RELA) {
@@ -170,6 +164,8 @@ void stabilizer_init_text_relocations(const set<Function*>& functions) {
             continue;
         }
 
+        exec_rela_sections++;
+
         // Bounds check relocation section contents.
         if(sh[i].sh_offset + sh[i].sh_size > (size_t)st.st_size) {
             continue;
@@ -177,11 +173,13 @@ void stabilizer_init_text_relocations(const set<Function*>& functions) {
 
         const Elf64_Rela* relas = (const Elf64_Rela*)(bytes + sh[i].sh_offset);
         size_t n = sh[i].sh_size / sizeof(Elf64_Rela);
+        exec_rela_entries += n;
 
         // Optional filter: only keep relocation types we know how to patch.
         for(size_t r = 0; r < n; r++) {
             uint32_t type = ELF64_R_TYPE(relas[r].r_info);
             if(type != R_X86_64_PC32 &&
+               type != R_X86_64_PLT32 &&
                type != R_X86_64_GOTPCREL &&
                type != R_X86_64_GOTPCRELX &&
                type != R_X86_64_REX_GOTPCRELX) {
@@ -198,10 +196,19 @@ void stabilizer_init_text_relocations(const set<Function*>& functions) {
 
             size_t off = (size_t)(P - (uintptr_t)f->getCodeBase());
             f->addTextReloc(off, type, relas[r].r_addend);
+            supported_relocs_added++;
         }
     }
 
     munmap(file, st.st_size);
+
+    // Diagnostics: these are best-effort; failure to load relocations should not
+    // crash programs that don't need them.
+    if(exec_rela_sections == 0) {
+        DEBUG("No executable RELA sections found in /proc/self/exe (missing -Wl,--emit-relocs?)");
+    } else if(supported_relocs_added == 0) {
+        DEBUG("Found %zu executable RELA sections (%zu entries) but recorded 0 supported relocations", exec_rela_sections, exec_rela_entries);
+    }
 #endif
 }
 

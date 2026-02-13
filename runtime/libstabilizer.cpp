@@ -140,7 +140,6 @@ void onTrap(int sig, siginfo_t* info, void* p) {
     // If the trap was placed to trigger a re-randomization
     if(rerandomizing) {
         DEBUG("Re-randomization started after trap on %p", c.ip());
-        (void) live_functions.empty();
 
         // Mark all on-stack function locations as used
         Stack s = c.stack();

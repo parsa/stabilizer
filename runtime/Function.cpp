@@ -120,7 +120,8 @@ void Function::applyTextRelocs(void* source, void* dest) {
         memcpy(&oldVal, newP, sizeof(oldVal));
 
         switch(r.type) {
-            case R_X86_64_PC32: {
+            case R_X86_64_PC32:
+            case R_X86_64_PLT32: {
                 // Relocation semantics: S + A - P
                 // Derive S from the already-relocated field value.
                 intptr_t S = (intptr_t)oldVal + (intptr_t)oldP - (intptr_t)r.addend;
@@ -134,7 +135,7 @@ void Function::applyTextRelocs(void* source, void* dest) {
 
                 int64_t newVal64 = (int64_t)oldVal - (int64_t)delta;
                 if(newVal64 < std::numeric_limits<int32_t>::min() || newVal64 > std::numeric_limits<int32_t>::max()) {
-                    ABORT("Text relocation overflow (PC32): func=%p src=%p dst=%p off=%zu old=%d delta=%ld",
+                    ABORT("Text relocation overflow (PC32/PLT32): func=%p src=%p dst=%p off=%zu old=%d delta=%ld",
                         _code.base(), source, dest, r.offset, (int)oldVal, (long)delta);
                 }
 
