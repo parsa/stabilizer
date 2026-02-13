@@ -50,13 +50,13 @@ static uintptr_t get_main_load_bias() {
 #endif
 }
 
-void stabilizer_init_text_relocations(const set<Function*>& functions) {
+bool stabilizer_init_text_relocations(const set<Function*>& functions) {
 #if !defined(__x86_64__)
     (void)functions;
-    return;
+    return true;
 #else
     if(functions.empty()) {
-        return;
+        return true;
     }
 
     // Build a sorted vector of functions by base address to make range checks fast.
@@ -72,27 +72,27 @@ void stabilizer_init_text_relocations(const set<Function*>& functions) {
     int fd = open("/proc/self/exe", O_RDONLY);
     if(fd < 0) {
         DEBUG("Unable to open /proc/self/exe: %s", strerror(errno));
-        return;
+        return false;
     }
 
     struct stat st;
     if(fstat(fd, &st) != 0) {
         DEBUG("Unable to stat /proc/self/exe: %s", strerror(errno));
         close(fd);
-        return;
+        return false;
     }
 
     void* file = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
     if(file == MAP_FAILED) {
         DEBUG("Unable to mmap /proc/self/exe: %s", strerror(errno));
-        return;
+        return false;
     }
 
     uint8_t* bytes = (uint8_t*)file;
     if((size_t)st.st_size < sizeof(Elf64_Ehdr)) {
         munmap(file, st.st_size);
-        return;
+        return false;
     }
 
     Elf64_Ehdr* eh = (Elf64_Ehdr*)bytes;
@@ -101,20 +101,20 @@ void stabilizer_init_text_relocations(const set<Function*>& functions) {
          eh->e_ident[EI_MAG2] == ELFMAG2 &&
          eh->e_ident[EI_MAG3] == ELFMAG3)) {
         munmap(file, st.st_size);
-        return;
+        return false;
     }
     if(eh->e_ident[EI_CLASS] != ELFCLASS64) {
         munmap(file, st.st_size);
-        return;
+        return false;
     }
 
     if(eh->e_shoff == 0 || eh->e_shentsize != sizeof(Elf64_Shdr) || eh->e_shnum == 0) {
         munmap(file, st.st_size);
-        return;
+        return false;
     }
     if((size_t)eh->e_shoff + (size_t)eh->e_shnum * sizeof(Elf64_Shdr) > (size_t)st.st_size) {
         munmap(file, st.st_size);
-        return;
+        return false;
     }
 
     Elf64_Shdr* sh = (Elf64_Shdr*)(bytes + eh->e_shoff);
@@ -178,11 +178,23 @@ void stabilizer_init_text_relocations(const set<Function*>& functions) {
         // Optional filter: only keep relocation types we know how to patch.
         for(size_t r = 0; r < n; r++) {
             uint32_t type = ELF64_R_TYPE(relas[r].r_info);
+
+            // PC-relative relocation types that require fixups when code moves.
             if(type != R_X86_64_PC32 &&
                type != R_X86_64_PLT32 &&
+               type != R_X86_64_PC16 &&
+               type != R_X86_64_PC8 &&
+               type != R_X86_64_PC64 &&
                type != R_X86_64_GOTPCREL &&
                type != R_X86_64_GOTPCRELX &&
-               type != R_X86_64_REX_GOTPCRELX) {
+               type != R_X86_64_REX_GOTPCRELX &&
+               type != R_X86_64_GOTPCREL64 &&
+               type != R_X86_64_GOTPC32 &&
+               type != R_X86_64_GOTPC64 &&
+               type != R_X86_64_TLSGD &&
+               type != R_X86_64_TLSLD &&
+               type != R_X86_64_GOTTPOFF &&
+               type != R_X86_64_GOTPC32_TLSDESC) {
                 continue;
             }
 
@@ -206,9 +218,12 @@ void stabilizer_init_text_relocations(const set<Function*>& functions) {
     // crash programs that don't need them.
     if(exec_rela_sections == 0) {
         DEBUG("No executable RELA sections found in /proc/self/exe (missing -Wl,--emit-relocs?)");
+        return false;
     } else if(supported_relocs_added == 0) {
         DEBUG("Found %zu executable RELA sections (%zu entries) but recorded 0 supported relocations", exec_rela_sections, exec_rela_entries);
     }
+
+    return true;
 #endif
 }
 

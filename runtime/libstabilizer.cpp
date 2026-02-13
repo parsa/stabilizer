@@ -62,7 +62,12 @@ int main(int argc, char **argv) {
     DEBUG("Signal handlers installed");
 
     // Pre-compute relocation fixups for randomized code.
-    stabilizer_init_text_relocations(functions);
+    // Code randomization requires ELF text relocations (link with --emit-relocs).
+    if(!functions.empty()) {
+        if(!stabilizer_init_text_relocations(functions)) {
+            ABORT("Unable to initialize ELF text relocations required for code randomization. This requires reading /proc/self/exe and linking with -Wl,--emit-relocs (szc adds this automatically for -Rcode). Rebuild without -Rcode if you cannot provide relocations.");
+        }
+    }
 
     // Lazily relocate functions
     for(set<Function*>::iterator iter = functions.begin(); iter != functions.end(); iter++) {

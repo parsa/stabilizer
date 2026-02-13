@@ -108,20 +108,72 @@ void Function::applyTextRelocs(void* source, void* dest) {
     uintptr_t internal_end = (uintptr_t)src + _code.size() + (_tableAdjacent ? _table.size() : 0);
 
     for(const TextReloc& r : _textRelocs) {
-        // All relocation types we currently track are 32-bit fields.
-        if(r.offset + sizeof(int32_t) > _code.size()) {
+        size_t fieldSize = 0;
+        switch(r.type) {
+            case R_X86_64_PC8:
+                fieldSize = 1;
+                break;
+            case R_X86_64_PC16:
+                fieldSize = 2;
+                break;
+            case R_X86_64_PC32:
+            case R_X86_64_PLT32:
+            case R_X86_64_GOTPCREL:
+            case R_X86_64_GOTPCRELX:
+            case R_X86_64_REX_GOTPCRELX:
+            case R_X86_64_GOTPC32:
+            case R_X86_64_TLSGD:
+            case R_X86_64_TLSLD:
+            case R_X86_64_GOTTPOFF:
+            case R_X86_64_GOTPC32_TLSDESC:
+                fieldSize = 4;
+                break;
+            case R_X86_64_PC64:
+            case R_X86_64_GOTPCREL64:
+            case R_X86_64_GOTPC64:
+                fieldSize = 8;
+                break;
+            default:
+                fieldSize = 0;
+                break;
+        }
+
+        if(fieldSize == 0) {
+            continue;
+        }
+
+        if(r.offset + fieldSize > _code.size()) {
             continue;
         }
 
         uint8_t* oldP = src + r.offset;
         uint8_t* newP = dst + r.offset;
 
-        int32_t oldVal = 0;
-        memcpy(&oldVal, newP, sizeof(oldVal));
+        int64_t oldVal = 0;
+        if(fieldSize == 8) {
+            int64_t v = 0;
+            memcpy(&v, newP, sizeof(v));
+            oldVal = v;
+        } else if(fieldSize == 4) {
+            int32_t v = 0;
+            memcpy(&v, newP, sizeof(v));
+            oldVal = v;
+        } else if(fieldSize == 2) {
+            int16_t v = 0;
+            memcpy(&v, newP, sizeof(v));
+            oldVal = v;
+        } else if(fieldSize == 1) {
+            int8_t v = 0;
+            memcpy(&v, newP, sizeof(v));
+            oldVal = v;
+        }
 
         switch(r.type) {
+            case R_X86_64_PC8:
+            case R_X86_64_PC16:
             case R_X86_64_PC32:
-            case R_X86_64_PLT32: {
+            case R_X86_64_PLT32:
+            case R_X86_64_PC64: {
                 // Relocation semantics: S + A - P
                 // Derive S from the already-relocated field value.
                 intptr_t S = (intptr_t)oldVal + (intptr_t)oldP - (intptr_t)r.addend;
@@ -134,27 +186,57 @@ void Function::applyTextRelocs(void* source, void* dest) {
                 }
 
                 int64_t newVal64 = (int64_t)oldVal - (int64_t)delta;
-                if(newVal64 < std::numeric_limits<int32_t>::min() || newVal64 > std::numeric_limits<int32_t>::max()) {
-                    ABORT("Text relocation overflow (PC32/PLT32): func=%p src=%p dst=%p off=%zu old=%d delta=%ld",
-                        _code.base(), source, dest, r.offset, (int)oldVal, (long)delta);
-                }
 
-                int32_t newVal = (int32_t)newVal64;
-                memcpy(newP, &newVal, sizeof(newVal));
+                if(fieldSize == 8) {
+                    int64_t newVal = (int64_t)newVal64;
+                    memcpy(newP, &newVal, sizeof(newVal));
+                } else if(fieldSize == 4) {
+                    if(newVal64 < std::numeric_limits<int32_t>::min() || newVal64 > std::numeric_limits<int32_t>::max()) {
+                        ABORT("Text relocation overflow (PC32/PLT32): func=%p src=%p dst=%p off=%zu old=%ld delta=%ld",
+                            _code.base(), source, dest, r.offset, (long)oldVal, (long)delta);
+                    }
+                    int32_t newVal = (int32_t)newVal64;
+                    memcpy(newP, &newVal, sizeof(newVal));
+                } else if(fieldSize == 2) {
+                    if(newVal64 < std::numeric_limits<int16_t>::min() || newVal64 > std::numeric_limits<int16_t>::max()) {
+                        ABORT("Text relocation overflow (PC16): func=%p src=%p dst=%p off=%zu old=%ld delta=%ld",
+                            _code.base(), source, dest, r.offset, (long)oldVal, (long)delta);
+                    }
+                    int16_t newVal = (int16_t)newVal64;
+                    memcpy(newP, &newVal, sizeof(newVal));
+                } else if(fieldSize == 1) {
+                    if(newVal64 < std::numeric_limits<int8_t>::min() || newVal64 > std::numeric_limits<int8_t>::max()) {
+                        ABORT("Text relocation overflow (PC8): func=%p src=%p dst=%p off=%zu old=%ld delta=%ld",
+                            _code.base(), source, dest, r.offset, (long)oldVal, (long)delta);
+                    }
+                    int8_t newVal = (int8_t)newVal64;
+                    memcpy(newP, &newVal, sizeof(newVal));
+                }
                 break;
             }
 
             case R_X86_64_GOTPCREL:
             case R_X86_64_GOTPCRELX:
-            case R_X86_64_REX_GOTPCRELX: {
+            case R_X86_64_REX_GOTPCRELX:
+            case R_X86_64_GOTPCREL64:
+            case R_X86_64_GOTPC32:
+            case R_X86_64_GOTPC64:
+            case R_X86_64_TLSGD:
+            case R_X86_64_TLSLD:
+            case R_X86_64_GOTTPOFF:
+            case R_X86_64_GOTPC32_TLSDESC: {
                 int64_t newVal64 = (int64_t)oldVal - (int64_t)delta;
-                if(newVal64 < std::numeric_limits<int32_t>::min() || newVal64 > std::numeric_limits<int32_t>::max()) {
-                    ABORT("Text relocation overflow (GOTPCREL): func=%p src=%p dst=%p off=%zu old=%d delta=%ld",
-                        _code.base(), source, dest, r.offset, (int)oldVal, (long)delta);
+                if(fieldSize == 8) {
+                    int64_t newVal = (int64_t)newVal64;
+                    memcpy(newP, &newVal, sizeof(newVal));
+                } else {
+                    if(newVal64 < std::numeric_limits<int32_t>::min() || newVal64 > std::numeric_limits<int32_t>::max()) {
+                        ABORT("Text relocation overflow (PC-relative 32): func=%p src=%p dst=%p off=%zu old=%ld delta=%ld",
+                            _code.base(), source, dest, r.offset, (long)oldVal, (long)delta);
+                    }
+                    int32_t newVal = (int32_t)newVal64;
+                    memcpy(newP, &newVal, sizeof(newVal));
                 }
-
-                int32_t newVal = (int32_t)newVal64;
-                memcpy(newP, &newVal, sizeof(newVal));
                 break;
             }
 

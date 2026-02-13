@@ -10,6 +10,10 @@ libstabilizer.dylib
 runtime/obj
 pass/obj
 
+tests/*/*.s
+tests/*/*.bc
+tests/*/*.opt.bc
+
 tests/HelloWorld/obj
 tests/HelloWorld/hello
 

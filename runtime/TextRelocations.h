@@ -17,7 +17,7 @@ struct Function;
  * with `--emit-relocs`) and assigns relevant relocations to each registered
  * Function.
  */
-void stabilizer_init_text_relocations(const std::set<Function*>& functions);
+bool stabilizer_init_text_relocations(const std::set<Function*>& functions);
 
 #endif
 
