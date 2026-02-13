@@ -22,8 +22,12 @@ enum {
 class DataSource : public SizeHeap<FreelistHeap<BumpAlloc<DataSize, MMapSource<DataProt, DataFlags>, 16> > > {};
 class CodeSource : public SizeHeap<FreelistHeap<BumpAlloc<CodeSize, MMapSource<CodeProt, CodeFlags>, CODE_ALIGN> > > {};
     
-typedef ANSIWrapper<KingsleyHeap<DataSource, DataSource> > DataHeapType;
-typedef ANSIWrapper<KingsleyHeap<CodeSource, CodeSource> > CodeHeapType;
+// Restore DieHard's shuffling layer for heap/code placement randomization.
+// Modern `ShuffleHeap` takes (ChunkSize, MaxSize, SuperHeap). We use a shuffled
+// KingsleyHeap, preserving the original `DataShuffle`/`CodeShuffle` tunables as
+// the maximum shuffled object size.
+typedef ANSIWrapper<ShuffleHeap<4096, DataShuffle, KingsleyHeap<DataSource, DataSource> > > DataHeapType;
+typedef ANSIWrapper<ShuffleHeap<4096, CodeShuffle, KingsleyHeap<CodeSource, CodeSource> > > CodeHeapType;
     
 DataHeapType* getDataHeap();
 CodeHeapType* getCodeHeap();
