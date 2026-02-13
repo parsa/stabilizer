@@ -42,7 +42,7 @@ public:
         
         _defunct = false;
         _marked = false;
-        
+
         _f->copyTo(_memory.base());
         
         getRegistry().insert(this);

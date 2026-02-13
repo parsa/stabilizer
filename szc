@@ -68,6 +68,10 @@ parser.add_argument('-frontend', choices=['gcc', 'clang'], default='clang')
 # Compiler pass-through arguments
 parser.add_argument('-c', action='store_true')
 parser.add_argument('-o')
+# NOTE: default to the standard opt -O2 pipeline.
+# For code randomization, we also preserve text relocations in the final binary
+# so the Stabilizer runtime can fix up remaining pc-relative references (e.g.,
+# constant pools) after moving code.
 parser.add_argument('-O', type=int, default=2)
 parser.add_argument('-g', action='store_true')
 parser.add_argument('-f', action='append', default=[])
@@ -135,8 +139,8 @@ args.l.append('m')
 
 if 'code' in args.R:
 	passes.append('lower-intrinsics')
-	passes.append('lowerswitch')
-	passes.append('lowerinvoke')
+	passes.append('lower-switch')
+	passes.append('lower-invoke')
 	stabilize_opts.append('stabilize-code')
 
 if 'stack' in args.R:
@@ -167,7 +171,11 @@ def compile(input):
 		needsAssembly = True
 
 	else:
-		cmd = 'clang -O0 -c -emit-llvm'
+		# Clang adds `optnone` at -O0, which prevents later `opt` passes
+		# (including `default<O*>` and lowering passes) from running. That
+		# breaks Stabilizer's assumptions (e.g., we rely on switch lowering to
+		# avoid jump tables). Disable that behavior.
+		cmd = 'clang -O0 -Xclang -disable-O0-optnone -c -emit-llvm'
 		cmd += arg('o ', args.o)
 
 	cmd += arg('O', 0)
@@ -211,11 +219,12 @@ def transform(input):
 
 	cmd += ' -passes=\''
 
+	pipeline = []
 	if args.O > 0:
-		cmd += 'default<O' + str(args.O) + '>,'
+		pipeline.append('default<O' + str(args.O) + '>')
 
-	# cmd += arg('', opts)
-	cmd += ','.join(passes)
+	pipeline.extend(passes)
+	cmd += ','.join(pipeline)
 	cmd +=  '\''
 
 	cmd += ' '.join([' -' + v + '=true' for v in stabilize_opts])
@@ -241,6 +250,11 @@ def codegen(input):
 		cmd = args.frontend
 
 	cmd += ' ' + args.o + '.s'
+
+	# Keep relocation records so the runtime can patch pc-relative references
+	# after moving code.
+	if args.platform == 'linux' and 'code' in args.R:
+		cmd += ' -Wl,--emit-relocs'
 
 	cmd += arg('o ', args.o)
 	cmd += arg('f', args.f)

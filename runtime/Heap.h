@@ -22,8 +22,8 @@ enum {
 class DataSource : public SizeHeap<FreelistHeap<BumpAlloc<DataSize, MMapSource<DataProt, DataFlags>, 16> > > {};
 class CodeSource : public SizeHeap<FreelistHeap<BumpAlloc<CodeSize, MMapSource<CodeProt, CodeFlags>, CODE_ALIGN> > > {};
     
-typedef ANSIWrapper<KingsleyHeap<ShuffleHeap<DataShuffle, DataSource>, DataSource> > DataHeapType;
-typedef ANSIWrapper<KingsleyHeap<ShuffleHeap<CodeShuffle, CodeSource>, CodeSource> > CodeHeapType;
+typedef ANSIWrapper<KingsleyHeap<DataSource, DataSource> > DataHeapType;
+typedef ANSIWrapper<KingsleyHeap<CodeSource, CodeSource> > CodeHeapType;
     
 DataHeapType* getDataHeap();
 CodeHeapType* getCodeHeap();

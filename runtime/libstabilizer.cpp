@@ -11,6 +11,7 @@
 #include "Debug.h"
 #include "Heap.h"
 #include "Context.h"
+#include "TextRelocations.h"
 
 using namespace std;
 
@@ -59,6 +60,9 @@ int main(int argc, char **argv) {
     setHandler(SIGALRM, onTimer);
     setHandler(SIGSEGV, onFault);
     DEBUG("Signal handlers installed");
+
+    // Pre-compute relocation fixups for randomized code.
+    stabilizer_init_text_relocations(functions);
 
     // Lazily relocate functions
     for(set<Function*>::iterator iter = functions.begin(); iter != functions.end(); iter++) {

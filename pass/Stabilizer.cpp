@@ -6,6 +6,7 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/DerivedTypes.h>
 
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/CommandLine.h>
@@ -139,7 +140,7 @@ struct StabilizerImpl {
         {
             if(!f.isIntrinsic()
                 && !f.isDeclaration()
-                && !f.getName().equals("__gxx_personality_v0")) {
+                && f.getName() != "__gxx_personality_v0") {
 
                 local_functions.insert(&f);
             }
@@ -266,7 +267,7 @@ struct StabilizerImpl {
         Type* i32_t = Type::getInt32Ty(m.getContext());
 
         // Void pointer type
-        Type* void_p_t = Type::getInt8PtrTy(m.getContext());
+        Type* void_p_t = PointerType::get(m.getContext(), 0);
 
         // Constructor function type
         FunctionType* ctor_fn_t = FunctionType::get(void_t, false);
@@ -339,8 +340,9 @@ struct StabilizerImpl {
      * \arg f The function being transformed
      */
     void randomizeStack(Module& m, llvm::Function& f, GlobalVariable* stackPad) {
-        Function* stacksave = Intrinsic::getDeclaration(&m, Intrinsic::stacksave);
-        Function* stackrestore = Intrinsic::getDeclaration(&m, Intrinsic::stackrestore);
+        Type* ptrTy = m.getDataLayout().getAllocaPtrType(m.getContext());
+        Function* stacksave = Intrinsic::getOrInsertDeclaration(&m, Intrinsic::stacksave, {ptrTy});
+        Function* stackrestore = Intrinsic::getOrInsertDeclaration(&m, Intrinsic::stackrestore, {ptrTy});
 
         // Get all the callsites in this function
         vector<CallInst*> calls;
@@ -376,7 +378,7 @@ struct StabilizerImpl {
             PtrToIntInst* oldStackInt = new PtrToIntInst(oldStack, getIntptrType(m), "", c);
 
             BinaryOperator* newStackInt = BinaryOperator::CreateSub(oldStackInt, padSize, "", c);
-            IntToPtrInst* newStack = new IntToPtrInst(newStackInt, Type::getInt8PtrTy(m.getContext()), "", c);
+            IntToPtrInst* newStack = new IntToPtrInst(newStackInt, PointerType::get(m.getContext(), 0), "", c);
 
             vector<Value*> newStackArgs;
             newStackArgs.push_back(newStack);
@@ -511,16 +513,16 @@ struct StabilizerImpl {
             vector<Value*> args;
 
             // The function base
-            args.push_back(ConstantExpr::getPointerCast(&f, Type::getInt8PtrTy(m.getContext())));
+            args.push_back(ConstantExpr::getPointerCast(&f, PointerType::get(m.getContext(), 0)));
 
             // The function limit
-            args.push_back(ConstantExpr::getPointerCast(next, Type::getInt8PtrTy(m.getContext())));
+            args.push_back(ConstantExpr::getPointerCast(next, PointerType::get(m.getContext(), 0)));
 
             // The global relocation table
-            args.push_back(ConstantExpr::getPointerCast(relocationTable, Type::getInt8PtrTy(m.getContext())));
+            args.push_back(ConstantExpr::getPointerCast(relocationTable, PointerType::get(m.getContext(), 0)));
 
             // The size of the relocation table
-            args.push_back(ConstantExpr::getIntegerCast(ConstantExpr::getSizeOf(relocationTableType), Type::getInt32Ty(m.getContext()), false));
+            args.push_back(ConstantExpr::getTrunc(ConstantExpr::getSizeOf(relocationTableType), Type::getInt32Ty(m.getContext())));
 
             // If true, the function uses an adjacent relocation table, not the global
             args.push_back(Constant::getIntegerValue(Type::getInt1Ty(m.getContext()), APInt(1, isDataPCRelative(m), false)));
@@ -531,13 +533,13 @@ struct StabilizerImpl {
             vector<Value*> args;
 
             // The function base
-            args.push_back(ConstantExpr::getPointerCast(&f, Type::getInt8PtrTy(m.getContext())));
+            args.push_back(ConstantExpr::getPointerCast(&f, PointerType::get(m.getContext(), 0)));
 
             // The function limit
-            args.push_back(ConstantExpr::getPointerCast(next, Type::getInt8PtrTy(m.getContext())));
+            args.push_back(ConstantExpr::getPointerCast(next, PointerType::get(m.getContext(), 0)));
 
             // The global relocation table (null)
-            args.push_back(Constant::getNullValue(Type::getInt8PtrTy(m.getContext())));
+            args.push_back(Constant::getNullValue(PointerType::get(m.getContext(), 0)));
 
             // The size of the relocation table (0)
             args.push_back(Constant::getIntegerValue(Type::getInt32Ty(m.getContext()), APInt(32, 0, false)));
@@ -556,7 +558,7 @@ struct StabilizerImpl {
         if(isa<Function>(v)) {
             Function* f = dyn_cast<Function>(v);
 
-            if(f->isIntrinsic() || f->getName().equals("__gxx_personality_v0")) {
+            if(f->isIntrinsic() || f->getName() == "__gxx_personality_v0") {
                 return false;
             } else {
                 return true;
@@ -881,12 +883,12 @@ struct StabilizerImpl {
         //    void* codeBase, void* codeLimit, void* tableBase, size_t tableSize,
         //    bool adjacent, uint8_t* stackPad)
         vector<Type*> register_function_params;
-        register_function_params.push_back(Type::getInt8PtrTy(m.getContext()));
-        register_function_params.push_back(Type::getInt8PtrTy(m.getContext()));
-        register_function_params.push_back(Type::getInt8PtrTy(m.getContext()));
+        register_function_params.push_back(PointerType::get(m.getContext(), 0));
+        register_function_params.push_back(PointerType::get(m.getContext(), 0));
+        register_function_params.push_back(PointerType::get(m.getContext(), 0));
         register_function_params.push_back(Type::getInt32Ty(m.getContext()));
         register_function_params.push_back(Type::getInt1Ty(m.getContext()));
-        register_function_params.push_back(Type::getInt8PtrTy(m.getContext()));
+        register_function_params.push_back(PointerType::get(m.getContext(), 0));
 
         registerFunction = Function::Create(
              FunctionType::get(Type::getVoidTy(m.getContext()), register_function_params, false),
@@ -901,7 +903,7 @@ struct StabilizerImpl {
         // void stabilizer_register_constructor(void* ctor)
         registerConstructor = Function::Create(
             FunctionType::get(Type::getVoidTy(m.getContext()),
-                {Type::getInt8PtrTy(m.getContext())}, false),
+                {PointerType::get(m.getContext(), 0)}, false),
             Function::ExternalLinkage,
             "stabilizer_register_constructor",
             &m
@@ -913,7 +915,7 @@ struct StabilizerImpl {
         // void stabilizer_register_stack_pad(uint8_t* pad)
         registerStackPad = Function::Create(
             FunctionType::get(Type::getVoidTy(m.getContext()),
-                {Type::getInt8PtrTy(m.getContext())}, false),
+                {PointerType::get(m.getContext(), 0)}, false),
             Function::ExternalLinkage,
             "stabilizer_register_stack_pad",
             &m

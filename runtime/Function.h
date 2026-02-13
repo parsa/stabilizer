@@ -1,7 +1,9 @@
 #if !defined(RUNTIME_FUNCTION_H)
 #define RUNTIME_FUNCTION_H
 
+#include <cstdint>
 #include <string.h>
+#include <vector>
 #include <sys/mman.h>
 
 #include "Util.h"
@@ -12,6 +14,12 @@
 
 struct Function;
 struct FunctionLocation;
+
+struct TextReloc {
+    size_t offset;      // Offset from the function base to the relocation field
+    uint32_t type;      // ELF relocation type (e.g., R_X86_64_PC32)
+    int64_t addend;     // ELF relocation addend (RELA)
+};
 
 struct FunctionHeader {
 private:
@@ -52,6 +60,8 @@ private:
     uint8_t* _stackPad;		//< The address of the stack pad value for this function
     
     FunctionLocation* _current;
+
+    std::vector<TextReloc> _textRelocs;
     
     /**
      * \brief Place a jump instruction to forward calls to this function
@@ -63,6 +73,8 @@ private:
     }
     
     void copyTo(void* target);
+
+    void applyTextRelocs(void* source, void* dest);
     
 public:
     /**
@@ -128,6 +140,10 @@ public:
     
     inline size_t getCodeSize() {
         return _code.size();
+    }
+
+    inline void addTextReloc(size_t offset, uint32_t type, int64_t addend) {
+        _textRelocs.push_back({offset, type, addend});
     }
     
     inline size_t getAllocationSize() {
