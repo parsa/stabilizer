@@ -1,5 +1,6 @@
 ROOT = ../..
 TARGETS = libquantum
+LIBS = m
 
 build:: libquantum
 

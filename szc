@@ -57,30 +57,9 @@ def try_run(cmd):
 		_print_cmd(cmd)
 	return subprocess.call(cmd) == 0
 
-def find_tool(names, envvar=None, required=True):
-	if envvar:
-		override = os.environ.get(envvar)
-		if override:
-			return override
-
-	if isinstance(names, str):
-		names = [names]
-
-	for n in names:
-		p = shutil.which(n)
-		if p:
-			return p
-
-	if required:
-		hint = (' (or set ' + envvar + ')') if envvar else ''
-		print("Required tool not found in PATH: " + ', '.join(names) + hint)
-		exit(1)
-
-	return None
-
 def require_flang():
 	if not FLANG:
-		print('Fortran requested but flang was not found. Ensure `flang` (or `flang-new`) is in PATH (or set SZC_FLANG).')
+		print('Fortran requested but flang was not found. Ensure `flang` (or `flang-new`) is in PATH.')
 		exit(1)
 	return FLANG
 
@@ -119,13 +98,12 @@ if args.platform == 'osx':
 else:
 	LIBSUFFIX = 'so'
 
-CLANG = find_tool(args.frontend, envvar='SZC_CLANG')
-OPT = find_tool('opt', envvar='SZC_OPT')
-LLVM_LINK = find_tool('llvm-link', envvar='SZC_LLVM_LINK')
-LLC = find_tool('llc', envvar='SZC_LLC')
-LLVM_AS = find_tool('llvm-as', envvar='SZC_LLVM_AS')
+OPT = 'opt'
+LLVM_LINK = 'llvm-link'
+LLC = 'llc'
+LLVM_AS = 'llvm-as'
 
-FLANG = find_tool(['flang', 'flang-new'], envvar='SZC_FLANG', required=False)
+FLANG = shutil.which('flang') or shutil.which('flang-new')
 
 if not args.o:
 	# Match common compiler defaults, and avoid confusing TypeErrors later.
@@ -135,25 +113,23 @@ if not args.o:
 	else:
 		args.o = 'a.out'
 
-opts = []
 passes = []
-stabilize_opts = []
+opts = []
 
 args.l.append('stdc++')
-args.l.append('m')
 # args.v = True
 
 if 'code' in args.R:
 	passes.append('lower-intrinsics')
 	passes.append('lower-switch')
 	passes.append('lower-invoke')
-	stabilize_opts.append('stabilize-code')
+	opts.append('stabilize-code')
 
 if 'stack' in args.R:
-	stabilize_opts.append('stabilize-stack')
+	opts.append('stabilize-stack')
 
 if 'heap' in args.R:
-	stabilize_opts.append('stabilize-heap')
+	opts.append('stabilize-heap')
 
 if 'code' in args.R or 'heap' in args.R or 'stack' in args.R:
 	args.L.append(STABILIZER_HOME)
@@ -189,7 +165,7 @@ def compile(input):
 		# (including `default<O*>` and lowering passes) from running. That
 		# breaks Stabilizer's assumptions (e.g., we rely on switch lowering to
 		# avoid jump tables). Disable that behavior.
-		cmd = [CLANG, '-O0', '-Xclang', '-disable-O0-optnone', '-c', '-emit-llvm', '-o', args.o]
+		cmd = [args.frontend, '-O0', '-Xclang', '-disable-O0-optnone', '-c', '-emit-llvm', '-o', args.o]
 		cmd += arg('g', args.g)
 		cmd += arg('I', args.I)
 		cmd += arg('f', args.f)
@@ -222,7 +198,7 @@ def transform(input):
 	pipeline.extend(passes)
 	cmd.append('-passes=' + ','.join(pipeline))
 
-	for v in stabilize_opts:
+	for v in opts:
 		cmd.append('-' + v + '=true')
 
 	run(cmd)
@@ -243,7 +219,7 @@ def codegen(input):
 		flang = require_flang()
 		cmd = [flang]
 	else:
-		cmd = [CLANG]
+		cmd = [args.frontend]
 
 	cmd.append(llc_obj)
 

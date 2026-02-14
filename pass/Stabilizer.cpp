@@ -21,6 +21,15 @@
 
 using namespace llvm;
 
+static std::string toStdString(const std::string& s) {
+    return s;
+}
+
+template <typename T>
+static std::string toStdString(const T& t) {
+    return t.str();
+}
+
 enum {
     ALIGN = 64
 };
@@ -31,8 +40,6 @@ cl::opt<bool> stabilize_stack  ("stabilize-stack",   cl::init(false), cl::desc("
 cl::opt<bool> stabilize_code   ("stabilize-code",    cl::init(false), cl::desc("Randomize function placement"));
 
 struct StabilizerImpl {
-    static char ID;
-
     Function* registerFunction;
     Function* registerConstructor;
     Function* registerStackPad;
@@ -52,7 +59,7 @@ struct StabilizerImpl {
      * \returns A Platform value
      */
     Platform getPlatform(Module& m) {
-        std::string triple = m.getTargetTriple().str();
+        std::string triple = toStdString(m.getTargetTriple());
 
         // Convert the target-triple to lowercase
         std::transform(triple.begin(), triple.end(), triple.begin(), ::tolower);

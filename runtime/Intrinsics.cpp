@@ -1,13 +1,8 @@
 #include <stdlib.h>
 #include <stdint.h>
-#include <math.h>
 #include <string.h>
 
 extern "C" {
-    float powif(float b, int e) {
-        return powf(b, (float)e);
-    }
-
     // ---------------------------------------------------------------------
     // Memory intrinsic wrappers
     //

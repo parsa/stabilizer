@@ -66,32 +66,6 @@ namespace intrinsic_libcalls {
             libcall_map["llvm.memset.i16"] = "memset_i16";
             libcall_map["llvm.memset.i32"] = "memset_i32";
             libcall_map["llvm.memset.i64"] = "memset_i64";
-
-            libcall_map["llvm.sqrt.f32"] = "sqrtf";
-            libcall_map["llvm.sqrt.f64"] = "sqrt";
-            libcall_map["llvm.sqrt.f80"] = "sqrtl";
-
-            libcall_map["llvm.log.f32"] = "logf";
-            libcall_map["llvm.log.f64"] = "log";
-            libcall_map["llvm.log.f80"] = "logl";
-
-            libcall_map["llvm.exp.f32"] = "expf";
-            libcall_map["llvm.exp.f64"] = "exp";
-            libcall_map["llvm.exp.f80"] = "expl";
-
-            libcall_map["llvm.pow.f32"] = "powf";
-            libcall_map["llvm.pow.f64"] = "pow";
-            libcall_map["llvm.pow.f80"] = "powl";
-            // Int-exponent pow: let LLVM lower `llvm.powi.*` itself. Mapping this
-            // to a libcall is non-portable and easy to get wrong.
-
-            libcall_map["llvm.log10.f32"] = "log10f";
-            libcall_map["llvm.log10.f64"] = "log10";
-            libcall_map["llvm.log10.f80"] = "log10l";
-
-            libcall_map["llvm.fabs.f32"] = "fabsf";
-            libcall_map["llvm.fabs.f64"] = "fabs";
-            libcall_map["llvm.fabs.f80"] = "fabsl";
         });
         return tables;
     }
