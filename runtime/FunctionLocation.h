@@ -7,8 +7,6 @@
 #include "Function.h"
 #include "CodeWindow.h"
 
-using namespace std;
-
 struct FunctionLocation {
 private:
     friend class Function;
@@ -18,13 +16,13 @@ private:
     bool _defunct;
     bool _marked;
     
-    static inline set<FunctionLocation*>& getRegistry() {
-        static set<FunctionLocation*> _registry;
+    static inline std::set<FunctionLocation*>& getRegistry() {
+        static std::set<FunctionLocation*> _registry;
         return _registry;
     }
     
     static FunctionLocation* find(void* p) {
-        for(set<FunctionLocation*>::iterator iter = getRegistry().begin(); iter != getRegistry().end(); iter++) {
+        for(std::set<FunctionLocation*>::iterator iter = getRegistry().begin(); iter != getRegistry().end(); iter++) {
             FunctionLocation* l = *iter;
             if(l->_memory.contains(p)) {
                 return l;
@@ -94,7 +92,7 @@ public:
     }
     
     static void sweep() {
-        set<FunctionLocation*>::iterator iter = getRegistry().begin();
+        std::set<FunctionLocation*>::iterator iter = getRegistry().begin();
         
         while(iter != getRegistry().end()) {
             FunctionLocation* l = *iter;

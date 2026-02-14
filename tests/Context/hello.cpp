@@ -9,8 +9,6 @@
 #include "Util.h"
 #include "Jump.h"
 
-using namespace std;
-
 extern "C" uint8_t saveState;
 extern "C" uint8_t stub;
 extern "C" size_t stubSize;

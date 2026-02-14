@@ -14,8 +14,6 @@
 #include "Context.h"
 #include "TextRelocations.h"
 
-using namespace std;
-
 extern "C" int stabilizer_main(int argc, char **argv);
 
 int main(int argc, char** argv);
@@ -29,10 +27,10 @@ void setHandler(int sig, void(*fn)(int, siginfo_t*, void*));
 
 typedef void(*ctor_t)();
 
-set<Function*> functions;
-set<Function*> live_functions;
-set<uint8_t*> stack_pads;
-vector<ctor_t> constructors;
+std::set<Function*> functions;
+std::set<Function*> live_functions;
+std::set<uint8_t*> stack_pads;
+std::vector<ctor_t> constructors;
 
 bool rerandomizing = false;
 size_t interval = 500;
@@ -115,7 +113,7 @@ int main(int argc, char **argv) {
     }
 
     // Lazily relocate functions
-    for(set<Function*>::iterator iter = functions.begin(); iter != functions.end(); iter++) {
+    for(std::set<Function*>::iterator iter = functions.begin(); iter != functions.end(); iter++) {
         Function* f = *iter;
         f->setTrap();
     }
@@ -126,7 +124,7 @@ int main(int argc, char **argv) {
     DEBUG("Set re-randomization timer");
 
     // Call all constructors
-    for(vector<ctor_t>::iterator i = constructors.begin(); i != constructors.end(); i++) {
+    for(std::vector<ctor_t>::iterator i = constructors.begin(); i != constructors.end(); i++) {
         (*i)();
     }
     DEBUG("Finished with program constructors");
@@ -229,7 +227,7 @@ void onTimer(int sig, siginfo_t* info, void* p) {
 
     if(functions.size() == 0) {
         DEBUG("Re-randomizing stack pads");
-        for(set<uint8_t*>::iterator iter = stack_pads.begin(); iter != stack_pads.end(); iter++) {
+        for(std::set<uint8_t*>::iterator iter = stack_pads.begin(); iter != stack_pads.end(); iter++) {
             uint8_t* pad = *iter;
             **iter = getRandomByte();
         }
@@ -238,7 +236,7 @@ void onTimer(int sig, siginfo_t* info, void* p) {
 
     } else {
         DEBUG("Placing traps");
-        for(set<Function*>::iterator iter = live_functions.begin(); iter != live_functions.end(); iter++) {
+        for(std::set<Function*>::iterator iter = live_functions.begin(); iter != live_functions.end(); iter++) {
             Function* f = *iter;
             if(c.ip() == f->getCodeBase()) {
                 DEBUG("Forwarding from trap at %p", c.ip());

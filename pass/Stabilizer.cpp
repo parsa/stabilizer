@@ -11,15 +11,15 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/CommandLine.h>
 
+#include <algorithm>
 #include <map>
 #include <set>
+#include <string>
 #include <vector>
 
 #define DEBUG_TYPE "stabilizer"
 
 using namespace llvm;
-
-using namespace std;
 
 enum {
     ALIGN = 64
@@ -52,22 +52,22 @@ struct StabilizerImpl {
      * \returns A Platform value
      */
     Platform getPlatform(Module& m) {
-        string triple = m.getTargetTriple().str();
+        std::string triple = m.getTargetTriple().str();
 
         // Convert the target-triple to lowercase
-        transform(triple.begin(), triple.end(), triple.begin(), ::tolower);
+        std::transform(triple.begin(), triple.end(), triple.begin(), ::tolower);
 
-        if(triple.find("x86_64") != string::npos
-            || triple.find("amd64") != string::npos) {
+        if(triple.find("x86_64") != std::string::npos
+            || triple.find("amd64") != std::string::npos) {
             return x86_64;
 
-        } else if(triple.find("i386") != string::npos
-            || triple.find("i486") != string::npos
-            || triple.find("i586") != string::npos
-            || triple.find("i686") != string::npos) {
+        } else if(triple.find("i386") != std::string::npos
+            || triple.find("i486") != std::string::npos
+            || triple.find("i586") != std::string::npos
+            || triple.find("i686") != std::string::npos) {
             return x86_32;
 
-        } else if(triple.find("powerpc") != string::npos) {
+        } else if(triple.find("powerpc") != std::string::npos) {
             return PowerPC;
 
         } else {
@@ -135,7 +135,7 @@ struct StabilizerImpl {
         }
 
         // Build a set of locally-defined functions
-        set<Function*> local_functions;
+        std::set<Function*> local_functions;
         for(Function& f : m)
         {
             if(!f.isIntrinsic()
@@ -148,7 +148,7 @@ struct StabilizerImpl {
 
         declareRuntimeFunctions(m);
 
-        map<Function*, GlobalVariable*> stackPads;
+        std::map<Function*, GlobalVariable*> stackPads;
 
         // Declare the stack pad table type
         Type* stackPadType = Type::getInt8Ty(m.getContext());
@@ -174,7 +174,7 @@ struct StabilizerImpl {
         }
 
         // Get any existing module constructors
-        vector<Value*> old_ctors = getConstructors(m);
+        std::vector<Value*> old_ctors = getConstructors(m);
 
         // Create a new constructor
         Function* ctor = makeConstructor(m, "stabilizer.module_ctor");
@@ -184,7 +184,7 @@ struct StabilizerImpl {
         if(stabilize_code) {
             // Transform each function and register it with the stabilizer runtime
             for(Function* f : local_functions) {
-                vector<Value*> args = randomizeCode(m, *f);
+                std::vector<Value*> args = randomizeCode(m, *f);
 
                 Value* table = stackPads[f];
                 if(table == NULL) {
@@ -199,7 +199,7 @@ struct StabilizerImpl {
 
         // Register each existing constructor with the stabilizer runtime
         for(Value* ctor_iter : old_ctors) {
-            vector<Value*> args;
+            std::vector<Value*> args;
             args.push_back(ctor_iter);
             CallInst::Create(registerConstructor, args, "", ctor_bb);
         }
@@ -207,7 +207,7 @@ struct StabilizerImpl {
         // If we're not randomizing code, declare the stack tables by themselves
         if(stabilize_stack && !stabilize_code) {
             for(auto [func, pad] : stackPads) {
-                vector<Value*> args;
+                std::vector<Value*> args;
                 args.push_back(pad);
                 CallInst::Create(registerStackPad, args, "", ctor_bb);
             }
@@ -225,8 +225,8 @@ struct StabilizerImpl {
      * \brief Get a list of module constructors
      * \arg m The module to scan
      */
-    vector<Value*> getConstructors(Module& m) {
-        vector<Value*> result;
+    std::vector<Value*> getConstructors(Module& m) {
+        std::vector<Value*> result;
 
         // Get the constructor table
         GlobalVariable *ctors = m.getGlobalVariable("llvm.global_ctors", false);
@@ -280,7 +280,7 @@ struct StabilizerImpl {
         Function* init = Function::Create(ctor_fn_t, Function::InternalLinkage, name, &m);
 
         // Sequence of constructor table entries
-        vector<Constant*> ctor_entries;
+        std::vector<Constant*> ctor_entries;
 
         // Add the entry for the new constructor
         // { i32 65535, ptr @stabilizer.module_ctor, ptr null }
@@ -345,7 +345,7 @@ struct StabilizerImpl {
         Function* stackrestore = Intrinsic::getOrInsertDeclaration(&m, Intrinsic::stackrestore, {ptrTy});
 
         // Get all the callsites in this function
-        vector<CallInst*> calls;
+        std::vector<CallInst*> calls;
 
         for(BasicBlock& b : f) {
             for(Instruction& i : b) {
@@ -380,11 +380,11 @@ struct StabilizerImpl {
             BinaryOperator* newStackInt = BinaryOperator::CreateSub(oldStackInt, padSize, "", c);
             IntToPtrInst* newStack = new IntToPtrInst(newStackInt, PointerType::get(m.getContext(), 0), "", c);
 
-            vector<Value*> newStackArgs;
+            std::vector<Value*> newStackArgs;
             newStackArgs.push_back(newStack);
             CallInst::Create(stackrestore, newStackArgs, "", c);
 
-            vector<Value*> oldStackArgs;
+            std::vector<Value*> oldStackArgs;
             oldStackArgs.push_back(oldStack);
             CallInst::Create(stackrestore, oldStackArgs, "", next);
         }
@@ -397,7 +397,7 @@ struct StabilizerImpl {
      * \arg f The function being transformed
      * \returns The arguments to be passed to stabilizer_register_function
      */
-    vector<Value*> randomizeCode(Module& m, Function& f) {
+    std::vector<Value*> randomizeCode(Module& m, Function& f) {
         // Add a dummy function used to compute the size
         Function* next = Function::Create(
             FunctionType::get(Type::getVoidTy(m.getContext()), false),
@@ -431,17 +431,17 @@ struct StabilizerImpl {
         //}
 
         // Collect all the referenced global values in this function
-        map<Constant*, set<Use*> > references = findPCRelativeUsesIn(f);
+        std::map<Constant*, std::set<Use*> > references = findPCRelativeUsesIn(f);
 
         if(references.size() > 0) {
             // Build an ordered list of referenced constants
-            vector<Constant*> referencedValues;
+            std::vector<Constant*> referencedValues;
             for(auto& p : references) {
                 referencedValues.push_back(p.first);
             }
 
             // Create an ordered list of types for the referenced constants
-            vector<Type*> referencedTypes;
+            std::vector<Type*> referencedTypes;
             for(Constant* c : referencedValues) {
                 referencedTypes.push_back(c->getType());
             }
@@ -486,7 +486,7 @@ struct StabilizerImpl {
                     }
 
                     // Get the relocation table slot
-                    vector<Constant*> indices;
+                    std::vector<Constant*> indices;
                     indices.push_back(Constant::getIntegerValue(Type::getInt32Ty(m.getContext()), APInt(32, 0, false)));
                     indices.push_back(Constant::getIntegerValue(Type::getInt32Ty(m.getContext()), APInt(32, (uint64_t)index, false)));
 
@@ -510,7 +510,7 @@ struct StabilizerImpl {
                 index++;
             }
 
-            vector<Value*> args;
+            std::vector<Value*> args;
 
             // The function base
             args.push_back(ConstantExpr::getPointerCast(&f, PointerType::get(m.getContext(), 0)));
@@ -530,7 +530,7 @@ struct StabilizerImpl {
             return args;
 
         } else {
-            vector<Value*> args;
+            std::vector<Value*> args;
 
             // The function base
             args.push_back(ConstantExpr::getPointerCast(&f, PointerType::get(m.getContext(), 0)));
@@ -586,8 +586,8 @@ struct StabilizerImpl {
      * \arg f The function to scan for PC-relative uses
      * \returns A map of all used values, each with a set of uses
      */
-    map<Constant*, set<Use*> > findPCRelativeUsesIn(Function& f) {
-        map<Constant*, set<Use*> > result;
+    std::map<Constant*, std::set<Use*> > findPCRelativeUsesIn(Function& f) {
+        std::map<Constant*, std::set<Use*> > result;
 
         for(BasicBlock& b : f) {
             for(Instruction& i_iter : b) {
@@ -601,7 +601,7 @@ struct StabilizerImpl {
                         if(isa<Constant>(operand) && containsGlobal(operand)) {
                             Constant* c = dyn_cast<Constant>(operand);
                             if(result.find(c) == result.end()) {
-                                result[c] = set<Use*>();
+                                result[c] = std::set<Use*>();
                             }
 
                             size_t operand_index = phi->getOperandNumForIncomingValue(index);
@@ -618,7 +618,7 @@ struct StabilizerImpl {
                         if(isa<Constant>(operand) && containsGlobal(operand)) {
                             Constant* c = dyn_cast<Constant>(operand);
                             if(result.find(c) == result.end()) {
-                                result[c] = set<Use*>();
+                                result[c] = std::set<Use*>();
                             }
 
                             result[c].insert(&use);
@@ -642,7 +642,7 @@ struct StabilizerImpl {
      */
     void extractFloatOperations(Function& f) {
         Module& m = *f.getParent();
-        vector<Instruction*> to_delete;
+        std::vector<Instruction*> to_delete;
         for(BasicBlock& b : f) {
             for(Instruction& i : b) {
                 if(isa<FPToSIInst>(&i)
@@ -653,7 +653,7 @@ struct StabilizerImpl {
 
                     Function* f = getFloatConversion(m, i.getOpcode(), i.getOperand(0)->getType(), i.getType());
 
-                    vector<Value*> args;
+                    std::vector<Value*> args;
                     args.push_back(i.getOperand(0));
                     CallInst *ci = CallInst::Create(f, ArrayRef<Value*>(args), "", &i);
 
@@ -732,7 +732,7 @@ struct StabilizerImpl {
      */
     Function* getFloatConversion(Module& m, unsigned opcode, Type* in, Type* out) {
         // LLVM stream bullshit
-        string name;
+        std::string name;
         raw_string_ostream ss(name);
 
         if(opcode == Instruction::FPToUI) {
@@ -776,7 +776,7 @@ struct StabilizerImpl {
 
         // If not found, create the function
         if(f == NULL) {
-            vector<Type*> params;
+            std::vector<Type*> params;
             params.push_back(in);
 
             f = Function::Create(
@@ -882,7 +882,7 @@ struct StabilizerImpl {
         // void stabilizer_register_function(
         //    void* codeBase, void* codeLimit, void* tableBase, size_t tableSize,
         //    bool adjacent, uint8_t* stackPad)
-        vector<Type*> register_function_params;
+        std::vector<Type*> register_function_params;
         register_function_params.push_back(PointerType::get(m.getContext(), 0));
         register_function_params.push_back(PointerType::get(m.getContext(), 0));
         register_function_params.push_back(PointerType::get(m.getContext(), 0));
