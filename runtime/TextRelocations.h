@@ -16,6 +16,9 @@ struct Function;
  * This routine scans the program's ELF relocation sections (requires linking
  * with `--emit-relocs`) and assigns relevant relocations to each registered
  * Function.
+ *
+ * Currently implemented on Linux/x86_64. On other platforms, code randomization
+ * (-Rcode) will fail at runtime with a clear diagnostic.
  */
 bool stabilizer_init_text_relocations(const std::set<Function*>& functions);
 

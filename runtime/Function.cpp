@@ -148,11 +148,16 @@ void Function::applyTextRelocs(void* source, void* dest) {
             case R_X86_64_GOTPCREL:
             case R_X86_64_GOTPCRELX:
             case R_X86_64_REX_GOTPCRELX:
+            case R_X86_64_GOTPC32:
+            case R_X86_64_TLSGD:
+            case R_X86_64_TLSLD:
+            case R_X86_64_GOTTPOFF:
+            case R_X86_64_GOTPC32_TLSDESC:
             {
                 int64_t newVal64 = (int64_t)oldVal - (int64_t)delta;
                 if(newVal64 < std::numeric_limits<int32_t>::min() || newVal64 > std::numeric_limits<int32_t>::max()) {
-                    ABORT("Text relocation overflow (GOTPCREL): func=%p src=%p dst=%p off=%zu old=%d delta=%ld",
-                        _code.base(), source, dest, r.offset, (int)oldVal, (long)delta);
+                    ABORT("Text relocation overflow (x86_64 pc-relative 32, type=%u): func=%p src=%p dst=%p off=%zu old=%d delta=%ld",
+                        (unsigned)r.type, _code.base(), source, dest, r.offset, (int)oldVal, (long)delta);
                 }
 
                 int32_t newVal = (int32_t)newVal64;

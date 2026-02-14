@@ -60,6 +60,12 @@ int main(int argc, char **argv) {
     setHandler(SIGSEGV, onFault);
     DEBUG("Signal handlers installed");
 
+#if !(defined(__linux__) && defined(__x86_64__))
+    if(!functions.empty()) {
+        ABORT("Code randomization (-Rcode) requires ELF text relocation fixups, which are currently only implemented on Linux x86_64. Disable -Rcode.");
+    }
+#endif
+
     // If code randomization is enabled, we must ensure relocated code stays
     // within range of x86_64 pc-relative relocations (signed 32-bit).
     if(!functions.empty()) {
@@ -84,7 +90,8 @@ int main(int argc, char **argv) {
         // If the randomized text span itself exceeds the pc-relative reach,
         // we cannot safely relocate without more invasive rewriting.
         if(max_addr < min_addr || (max_addr - min_addr) >= TWO_GB) {
-            ABORT("Executable text span too large for 32-bit pc-relative relocation. Disable -Rcode or use a non-PIE build.");
+            ABORT("Executable text span too large for 32-bit pc-relative relocations (span=%zu bytes, [%p, %p)). Code randomization requires all randomized code to fit within a 2GB window. Disable -Rcode.",
+                (size_t)(max_addr - min_addr), (void*)min_addr, (void*)max_addr);
         }
 
         uintptr_t span = max_addr - min_addr;
@@ -108,7 +115,13 @@ int main(int argc, char **argv) {
     // Code randomization requires ELF text relocations (link with --emit-relocs).
     if(!functions.empty()) {
         if(!stabilizer_init_text_relocations(functions)) {
-            ABORT("Unable to initialize ELF text relocations required for code randomization. This requires reading /proc/self/exe and linking with -Wl,--emit-relocs (szc adds this automatically for -Rcode). Rebuild without -Rcode if you cannot provide relocations.");
+          ABORT("Unable to initialize ELF text relocations required for code "
+                "randomization. This requires Linux x86_64, reading "
+                "/proc/self/exe, and linking with -Wl,--emit-relocs (szc adds "
+                "this automatically for -Rcode). If unsupported relocation "
+                "types are encountered inside randomized functions, Stabilizer "
+                "will ABORT with a separate diagnostic. Rebuild without -Rcode "
+                "if you cannot provide relocations.");
         }
     }
 

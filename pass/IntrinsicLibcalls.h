@@ -82,10 +82,8 @@ namespace intrinsic_libcalls {
             libcall_map["llvm.pow.f32"] = "powf";
             libcall_map["llvm.pow.f64"] = "pow";
             libcall_map["llvm.pow.f80"] = "powl";
-
-            libcall_map["llvm.powi.f32"] = "powif";
-            libcall_map["llvm.powi.f64"] = "powif";
-            libcall_map["llvm.powi.f80"] = "powil";
+            // Int-exponent pow: let LLVM lower `llvm.powi.*` itself. Mapping this
+            // to a libcall is non-portable and easy to get wrong.
 
             libcall_map["llvm.log10.f32"] = "log10f";
             libcall_map["llvm.log10.f64"] = "log10";

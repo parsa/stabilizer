@@ -1,5 +1,9 @@
 #include "TextRelocations.h"
 
+#include "Debug.h"
+
+#if defined(__linux__) && defined(__x86_64__)
+
 #include <algorithm>
 #include <cerrno>
 #include <cstdint>
@@ -7,24 +11,66 @@
 #include <vector>
 
 #include <fcntl.h>
+#include <link.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <elf.h>
 
-#if defined(__linux__)
-#include <link.h>
-#endif
-
-#include "Debug.h"
 #include "Function.h"
 
-using std::set;
-using std::vector;
+static const char* relocTypeName(uint32_t type) {
+    switch(type) {
+        case R_X86_64_PC32:
+            return "R_X86_64_PC32";
+        case R_X86_64_PLT32:
+            return "R_X86_64_PLT32";
+        case R_X86_64_GOTPCREL:
+            return "R_X86_64_GOTPCREL";
+        case R_X86_64_GOTPCRELX:
+            return "R_X86_64_GOTPCRELX";
+        case R_X86_64_REX_GOTPCRELX:
+            return "R_X86_64_REX_GOTPCRELX";
+        case R_X86_64_GOTPC32:
+            return "R_X86_64_GOTPC32";
+        case R_X86_64_TLSGD:
+            return "R_X86_64_TLSGD";
+        case R_X86_64_TLSLD:
+            return "R_X86_64_TLSLD";
+        case R_X86_64_GOTTPOFF:
+            return "R_X86_64_GOTTPOFF";
+        case R_X86_64_GOTPC32_TLSDESC:
+            return "R_X86_64_GOTPC32_TLSDESC";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static bool relocSupported(uint32_t type) {
+    switch(type) {
+        case R_X86_64_PC32:
+        case R_X86_64_PLT32:
+        case R_X86_64_GOTPCREL:
+        case R_X86_64_GOTPCRELX:
+        case R_X86_64_REX_GOTPCRELX:
+        case R_X86_64_GOTPC32:
+        case R_X86_64_TLSGD:
+        case R_X86_64_TLSLD:
+        case R_X86_64_GOTTPOFF:
+        case R_X86_64_GOTPC32_TLSDESC:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool relocSafeToIgnore(uint32_t type) {
+    // Definitely safe: no relocation.
+    return type == R_X86_64_NONE;
+}
 
 static uintptr_t get_main_load_bias() {
-#if defined(__linux__)
     struct BiasCtx {
         uintptr_t bias = 0;
         bool found = false;
@@ -45,22 +91,15 @@ static uintptr_t get_main_load_bias() {
     );
 
     return ctx.found ? ctx.bias : 0;
-#else
-    return 0;
-#endif
 }
 
-bool stabilizer_init_text_relocations(const set<Function*>& functions) {
-#if !defined(__x86_64__)
-    (void)functions;
-    return true;
-#else
+bool stabilizer_init_text_relocations(const std::set<Function*>& functions) {
     if(functions.empty()) {
         return true;
     }
 
     // Build a sorted vector of functions by base address to make range checks fast.
-    vector<Function*> sorted;
+    std::vector<Function*> sorted;
     sorted.reserve(functions.size());
     for(Function* f : functions) {
         sorted.push_back(f);
@@ -175,18 +214,8 @@ bool stabilizer_init_text_relocations(const set<Function*>& functions) {
         size_t n = sh[i].sh_size / sizeof(Elf64_Rela);
         exec_rela_entries += n;
 
-        // Optional filter: only keep relocation types we know how to patch.
         for(size_t r = 0; r < n; r++) {
             uint32_t type = ELF64_R_TYPE(relas[r].r_info);
-
-            // PC-relative relocation types that require fixups when code moves.
-            if(type != R_X86_64_PC32 &&
-               type != R_X86_64_PLT32 &&
-               type != R_X86_64_GOTPCREL &&
-               type != R_X86_64_GOTPCRELX &&
-               type != R_X86_64_REX_GOTPCRELX) {
-                continue;
-            }
 
             // In final linked ELF binaries (ET_EXEC/ET_DYN), r_offset is a virtual
             // address. For PIE (ET_DYN), add the load bias.
@@ -196,9 +225,23 @@ bool stabilizer_init_text_relocations(const set<Function*>& functions) {
                 continue;
             }
 
+            if(relocSupported(type)) {
+                size_t off = (size_t)(P - (uintptr_t)f->getCodeBase());
+                f->addTextReloc(off, type, relas[r].r_addend);
+                supported_relocs_added++;
+                continue;
+            }
+
+            if(relocSafeToIgnore(type)) {
+                continue;
+            }
+
+            // We found a relocation inside randomized code that we don't know how
+            // to patch after moving the function. Fail fast so we never silently
+            // mis-relocate code.
             size_t off = (size_t)(P - (uintptr_t)f->getCodeBase());
-            f->addTextReloc(off, type, relas[r].r_addend);
-            supported_relocs_added++;
+            ABORT("Unsupported x86_64 text relocation type %s (%u) inside randomized function: shdr=%u rel=%zu P=%p func=%p off=%zu addend=%ld. Disable -Rcode or extend relocation support.",
+                relocTypeName(type), (unsigned)type, (unsigned)i, r, (void*)P, f->getCodeBase(), off, (long)relas[r].r_addend);
         }
     }
 
@@ -214,6 +257,19 @@ bool stabilizer_init_text_relocations(const set<Function*>& functions) {
     }
 
     return true;
-#endif
 }
 
+#else
+
+bool stabilizer_init_text_relocations(const std::set<Function*>& functions) {
+    // Code randomization registers functions via the compiler pass. If no
+    // functions are registered, nothing to do.
+    if(functions.empty()) {
+        return true;
+    }
+
+    DEBUG("Code randomization (-Rcode) requires ELF text relocation fixups, which are currently only implemented on Linux x86_64. Disable -Rcode.");
+    return false;
+}
+
+#endif

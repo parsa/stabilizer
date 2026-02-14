@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import shlex
 import subprocess
 import sys
 import random
@@ -43,19 +44,43 @@ if args.frontend == 'gcc':
 	print('GCC/DragonEgg frontend is no longer supported. Use -frontend=clang (C/C++) or -lang=fortran (Flang).')
 	exit(1)
 
+def _print_cmd(cmd):
+	print(shlex.join(cmd))
+
 def run(cmd):
 	if args.v:
-		print(cmd)
-	subprocess.check_call(cmd, shell=True)
+		_print_cmd(cmd)
+	subprocess.check_call(cmd)
 
 def try_run(cmd):
 	if args.v:
-		print(cmd)
-	return subprocess.call(cmd, shell=True) == 0
+		_print_cmd(cmd)
+	return subprocess.call(cmd) == 0
+
+def find_tool(names, envvar=None, required=True):
+	if envvar:
+		override = os.environ.get(envvar)
+		if override:
+			return override
+
+	if isinstance(names, str):
+		names = [names]
+
+	for n in names:
+		p = shutil.which(n)
+		if p:
+			return p
+
+	if required:
+		hint = (' (or set ' + envvar + ')') if envvar else ''
+		print("Required tool not found in PATH: " + ', '.join(names) + hint)
+		exit(1)
+
+	return None
 
 def require_flang():
 	if not FLANG:
-		print('Fortran requested but flang was not found. Ensure `flang` (or `flang-new`) is in PATH.')
+		print('Fortran requested but flang was not found. Ensure `flang` (or `flang-new`) is in PATH (or set SZC_FLANG).')
 		exit(1)
 	return FLANG
 
@@ -73,20 +98,20 @@ def arg(flag, values):
 	if not isinstance(values, list):
 		values = [values]
 
-	cmd = ''
+	out = []
 	for v in values:
 		if v == True:
-			cmd += ' -' + flag
-		elif v == False:
+			out.append('-' + flag)
+		elif v == False or v is None:
 			pass
 		else:
-			cmd += ' -' + flag + v
-	return cmd
+			out.append('-' + flag + str(v))
+	return out
 
 if args.platform == 'auto':
 	args.platform = getPlatform()
 
-STABILIZER_HOME = os.path.dirname(__file__)
+STABILIZER_HOME = os.path.dirname(os.path.abspath(__file__))
 
 if args.platform == 'osx':
 	LIBSUFFIX = 'dylib'
@@ -94,7 +119,21 @@ if args.platform == 'osx':
 else:
 	LIBSUFFIX = 'so'
 
-FLANG = shutil.which('flang') or shutil.which('flang-new')
+CLANG = find_tool(args.frontend, envvar='SZC_CLANG')
+OPT = find_tool('opt', envvar='SZC_OPT')
+LLVM_LINK = find_tool('llvm-link', envvar='SZC_LLVM_LINK')
+LLC = find_tool('llc', envvar='SZC_LLC')
+LLVM_AS = find_tool('llvm-as', envvar='SZC_LLVM_AS')
+
+FLANG = find_tool(['flang', 'flang-new'], envvar='SZC_FLANG', required=False)
+
+if not args.o:
+	# Match common compiler defaults, and avoid confusing TypeErrors later.
+	if args.c and len(args.input) == 1 and not args.input[0].endswith('.o'):
+		base = os.path.splitext(os.path.basename(args.input[0]))[0]
+		args.o = base + '.o'
+	else:
+		args.o = 'a.out'
 
 opts = []
 passes = []
@@ -128,95 +167,92 @@ def compile(input):
 	if args.lang == 'fortran':
 		flang = require_flang()
 		common = arg('g', args.g) + arg('I', args.I) + arg('f', args.f) + arg('D', args.D)
-		out = arg('o ', args.o)
-		src = ' ' + input
 
 		# Emit LLVM bitcode via flang. Try O0 first; fall back if needed.
 		for opt in ['0', '1']:
-			if try_run(flang + ' -O' + opt + ' -c -emit-llvm' + out + common + src):
+			cmd = [flang, '-O' + opt, '-c', '-emit-llvm', '-o', args.o]
+			cmd += common
+			cmd.append(input)
+			if try_run(cmd):
 				return args.o
 
 		# Last resort: emit LLVM IR assembly and assemble it.
 		ll = args.o + '.ll'
-		run(flang + ' -O1 -S -emit-llvm' + arg('o ', ll) + common + src)
-		run('llvm-as -o ' + args.o + ' ' + ll)
+		cmd = [flang, '-O1', '-S', '-emit-llvm', '-o', ll]
+		cmd += common
+		cmd.append(input)
+		run(cmd)
+		run([LLVM_AS, '-o', args.o, ll])
 
 	else:
 		# Clang adds `optnone` at -O0, which prevents later `opt` passes
 		# (including `default<O*>` and lowering passes) from running. That
 		# breaks Stabilizer's assumptions (e.g., we rely on switch lowering to
 		# avoid jump tables). Disable that behavior.
-		cmd = args.frontend + ' -O0 -Xclang -disable-O0-optnone -c -emit-llvm'
-		cmd += arg('o ', args.o)
+		cmd = [CLANG, '-O0', '-Xclang', '-disable-O0-optnone', '-c', '-emit-llvm', '-o', args.o]
 		cmd += arg('g', args.g)
 		cmd += arg('I', args.I)
 		cmd += arg('f', args.f)
 		cmd += arg('D', args.D)
-		cmd += ' ' + input
-
+		cmd.append(input)
 		run(cmd)
 
 	return args.o
 
 def link(inputs):
-	cmd = 'llvm-link -o ' + args.o + '.bc '
+	cmd = [LLVM_LINK, '-o', args.o + '.bc']
 
 	if 'link' in args.R:
 		random.shuffle(inputs)
 
-	cmd += ' '.join(inputs)
+	cmd += inputs
 
 	run(cmd)
 	return args.o + '.bc'
 
 def transform(input):
-	cmd = 'opt -o ' + args.o + '.opt.bc'
-	cmd += ' ' + input
-
-	cmd += ' --load-pass-plugin=' + STABILIZER_HOME + '/LLVMStabilizer.' + LIBSUFFIX
-
-	cmd += ' -passes=\''
+	cmd = [OPT, '-o', args.o + '.opt.bc', input]
+	plugin = os.path.join(STABILIZER_HOME, 'LLVMStabilizer.' + LIBSUFFIX)
+	cmd.append('--load-pass-plugin=' + plugin)
 
 	pipeline = []
 	if args.O > 0:
 		pipeline.append('default<O' + str(args.O) + '>')
 
 	pipeline.extend(passes)
-	cmd += ','.join(pipeline)
-	cmd +=  '\''
+	cmd.append('-passes=' + ','.join(pipeline))
 
-	cmd += ' '.join([' -' + v + '=true' for v in stabilize_opts])
+	for v in stabilize_opts:
+		cmd.append('-' + v + '=true')
 
 	run(cmd)
 	return args.o + '.opt.bc'
 
 def codegen(input):
 	# cmd = 'llc -O0 -relocation-model=pic -disable-fp-elim'
-	cmd = 'llc -O0 -relocation-model=pic --frame-pointer=all'
+	cmd = [LLC, '-O0', '-relocation-model=pic', '--frame-pointer=all']
 	# Emit a native object file and link it directly. Flang's driver currently
 	# does not accept assembly (`.s`) inputs (it can error with "unknown
 	# integrated tool '-cc1as'"), so avoid producing/linking `.s` here.
 	llc_obj = args.o + '.llc.o'
-	cmd += ' -filetype=obj'
-	cmd += ' -o ' + llc_obj
-	cmd += ' ' + input
+	cmd += ['-filetype=obj', '-o', llc_obj, input]
 
 	run(cmd)
 
 	if args.lang == 'fortran':
 		flang = require_flang()
-		cmd = flang
+		cmd = [flang]
 	else:
-		cmd = args.frontend
+		cmd = [CLANG]
 
-	cmd += ' ' + llc_obj
+	cmd.append(llc_obj)
 
 	# Keep relocation records so the runtime can patch pc-relative references
 	# after moving code.
 	if args.platform == 'linux' and 'code' in args.R:
-		cmd += ' -Wl,--emit-relocs'
+		cmd.append('-Wl,--emit-relocs')
 
-	cmd += arg('o ', args.o)
+	cmd += ['-o', args.o]
 	cmd += arg('f', args.f)
 	cmd += arg('L', args.L)
 	cmd += arg('l', args.l)
