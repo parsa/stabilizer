@@ -103,6 +103,11 @@ public:
                 if(ptr != NULL) {
                     return ptr;
                 }
+                // If a code window is configured, failing to allocate within it
+                // means we cannot safely relocate code (pc-relative fixups may
+                // overflow). Fail fast rather than falling back to an arbitrary
+                // address.
+                return NULL;
             }
         }
 #endif

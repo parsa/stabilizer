@@ -1,58 +1,12 @@
 #!/usr/bin/env python3
 
 import os
-import stat
 import subprocess
 import sys
 import random
 import argparse
-import logging
 import shutil
 from distutils import util
-
-
-# region Auditing {{{
-def audit(event, event_args):
-	if event == 'subprocess.Popen':
-		executable, sp_args, cwd, env = event_args
-		logging.debug(f"+ {cwd or ''}$ {' '.join((str(i) for i in sp_args))}")
-	elif event == 'urllib.Request':
-		fullurl, data, headers, method = event_args
-		logging.debug(f'- {method} {fullurl}')
-	elif event == 'shutil.unpack_archive':
-		filename, extract_dir, fileformat = event_args
-		logging.debug(f'- unpack_archive {filename=}, {extract_dir=}, {format=}')
-	elif event == 'shutil.rmtree':
-		path = event_args[0]
-		logging.debug(f'- rmtree {path}')
-	elif event == 'open':
-		path, mode, flags = event_args
-		if isinstance(path, int) or (isinstance(path, str) and path.endswith('.pyc')):
-			return
-		fmod = stat.filemode(flags)
-		logging.debug(f'- open {path=} {mode=} {fmod=} ({flags:o})')
-	elif event == 'os.chdir':
-		path = event_args[0]
-		logging.debug(f'- chdir {path}')
-	elif event == 'os.mkdir':
-		path, mode, dir_fd = event_args
-		logging.debug(f'- mkdir {path=} {mode=} {dir_fd=}')
-	elif event == 'os.rename':
-		src, dst, src_dir_fd, dst_dir_fd = event_args
-		logging.debug(f'- rename {src=} {dst=} {src_dir_fd=} {dst_dir_fd=}')
-	elif event == 'os.chown':
-		path, uid, gid, dir_fd = event_args
-		logging.debug(f'- chown {path=} {uid=} {gid=} {dir_fd=}')
-
-
-logging.basicConfig(
-	format='%(asctime)s %(levelname)s %(message)s',
-	level=logging.DEBUG,
-	datefmt='%Y-%m-%d %H:%M:%S',
-)
-
-sys.addaudithook(audit)
-# endregion }}}
 
 
 parser = argparse.ArgumentParser(description='Stabilizer Compiler Driver')
@@ -239,20 +193,23 @@ def transform(input):
 def codegen(input):
 	# cmd = 'llc -O0 -relocation-model=pic -disable-fp-elim'
 	cmd = 'llc -O0 -relocation-model=pic --frame-pointer=all'
-	cmd += ' -o ' + args.o + '.s'
+	# Emit a native object file and link it directly. Flang's driver currently
+	# does not accept assembly (`.s`) inputs (it can error with "unknown
+	# integrated tool '-cc1as'"), so avoid producing/linking `.s` here.
+	llc_obj = args.o + '.llc.o'
+	cmd += ' -filetype=obj'
+	cmd += ' -o ' + llc_obj
 	cmd += ' ' + input
 
 	run(cmd)
 
 	if args.lang == 'fortran':
 		flang = require_flang()
-		# The flang driver in some installations cannot use clang's integrated
-		# assembler (`-cc1as`). Force the external assembler for `.s` inputs.
-		cmd = flang + ' -no-integrated-as'
+		cmd = flang
 	else:
 		cmd = args.frontend
 
-	cmd += ' ' + args.o + '.s'
+	cmd += ' ' + llc_obj
 
 	# Keep relocation records so the runtime can patch pc-relative references
 	# after moving code.
@@ -265,6 +222,13 @@ def codegen(input):
 	cmd += arg('l', args.l)
 
 	run(cmd)
+
+	# Avoid leaving extra native objects behind. Keep intermediates only with -v.
+	if not args.v:
+		try:
+			os.unlink(llc_obj)
+		except OSError:
+			pass
 
 	return args.o
 

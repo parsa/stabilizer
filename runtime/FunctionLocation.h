@@ -5,6 +5,7 @@
 
 #include "MemRange.h"
 #include "Function.h"
+#include "CodeWindow.h"
 
 using namespace std;
 
@@ -37,6 +38,11 @@ public:
     FunctionLocation(Function* f) :  _f(f), _memory(getCodeHeap()->malloc(_f->getAllocationSize()), _f->getAllocationSize()) {
         if(_memory.base() == NULL) {
             perror("code malloc");
+            uintptr_t lo = 0;
+            uintptr_t hi = 0;
+            if(stabilizer_get_code_window(&lo, &hi)) {
+                ABORT("Couldn't allocate memory for function relocation within code window [%p, %p)", (void*)lo, (void*)hi);
+            }
             ABORT("Couldn't allocate memory for function relocation");
         }
         

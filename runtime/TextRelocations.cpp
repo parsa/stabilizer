@@ -182,19 +182,9 @@ bool stabilizer_init_text_relocations(const set<Function*>& functions) {
             // PC-relative relocation types that require fixups when code moves.
             if(type != R_X86_64_PC32 &&
                type != R_X86_64_PLT32 &&
-               type != R_X86_64_PC16 &&
-               type != R_X86_64_PC8 &&
-               type != R_X86_64_PC64 &&
                type != R_X86_64_GOTPCREL &&
                type != R_X86_64_GOTPCRELX &&
-               type != R_X86_64_REX_GOTPCRELX &&
-               type != R_X86_64_GOTPCREL64 &&
-               type != R_X86_64_GOTPC32 &&
-               type != R_X86_64_GOTPC64 &&
-               type != R_X86_64_TLSGD &&
-               type != R_X86_64_TLSLD &&
-               type != R_X86_64_GOTTPOFF &&
-               type != R_X86_64_GOTPC32_TLSDESC) {
+               type != R_X86_64_REX_GOTPCRELX) {
                 continue;
             }
 

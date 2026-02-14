@@ -43,17 +43,15 @@ See also this [nice blog post](https://fgiesen.wordpress.com/2017/09/02/papers-i
 
 ### Building Requirements
 
-_NOTE: This project was originally built for LLVM 3.x. This repository has been updated to work with modern LLVM toolchains._
+_NOTE: This project was originally built for LLVM 3.1. This repository has been updated to work with modern LLVM toolchains (tested with LLVM 21)._
 
-Stabilizer requires LLVM (tested with LLVM 21), and uses the LLVM toolchain
-(`clang`, `opt`, `llvm-link`, `llc`, `llvm-as`). For Fortran inputs, Stabilizer
-uses LLVM Flang (`flang` / `flang-new`).
+Stabilizer runs on OSX and Linux, and supports x86, x86_64, and PowerPC.
 
-The legacy GCC + DragonEgg (Dragonegg) frontend is no longer supported.
+Stabilizer requires LLVM and the Clang front-end. Stabilizer's build system assumes LLVM include files will be accessible through your default include path.
 
+The legacy GCC + Dragonegg (Dragonegg/DragonEgg) frontend is no longer supported. For C/C++ inputs, `szc` uses clang. For Fortran inputs, `szc` uses LLVM Flang (`flang` / `flang-new`).
 
-Stabilizer's compiler driver `szc` is written in Python 3 and uses the
-`argparse` module.
+Stabilizer's compiler driver `szc` is written in Python 3. It uses the `argparse` module.
 
 ### Building Stabilizer
 ```
@@ -76,9 +74,7 @@ $ szc -Rcode -Rstack -Rheap foo.c -o foo
 ```
 
 The `-R` flags enable randomizations, and may be used in any combination.
-Stabilizer uses clang for C/C++ inputs, and flang for Fortran inputs (when
-invoked with `-lang=fortran`). The `-frontend` flag is kept for compatibility
-(`-frontend=gcc` is no longer supported).
+Stabilizer uses clang as its front-end. The legacy `-frontend=gcc`/Dragonegg path is no longer supported. For Fortran inputs (`-lang=fortran`), `szc` uses LLVM Flang (`flang` / `flang-new`).
 
 The resulting executable is linked against with `libstabilizer.so` (or `.dylib` 
 on OSX). Place this library somewhere in your system's dynamic library search

@@ -12,57 +12,18 @@
 
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/StringSet.h"
 
 namespace stabilizer {
 namespace intrinsic_libcalls {
     struct Tables {
         llvm::StringMap<llvm::StringRef> libcall_map;
-        llvm::StringSet<> always_inlined;
     };
 
     inline Tables& getTables() {
         static Tables tables;
         static std::once_flag once;
         std::call_once(once, [&] {
-            auto& inlined = tables.always_inlined;
             auto& libcall_map = tables.libcall_map;
-
-            inlined.insert("llvm.va_start");
-            inlined.insert("llvm.va_copy");
-            inlined.insert("llvm.va_end");
-
-            inlined.insert("llvm.dbg.declare");
-            inlined.insert("llvm.dbg.value");
-
-            inlined.insert("llvm.expect.i8");
-            inlined.insert("llvm.expect.i16");
-            inlined.insert("llvm.expect.i32");
-            inlined.insert("llvm.expect.i64");
-
-            inlined.insert("llvm.uadd.with.overflow.i32");
-
-            inlined.insert("llvm.objectsize.i8");
-            inlined.insert("llvm.objectsize.i16");
-            inlined.insert("llvm.objectsize.i32");
-            inlined.insert("llvm.objectsize.i64");
-
-            inlined.insert("llvm.bswap.i8");
-            inlined.insert("llvm.bswap.i16");
-            inlined.insert("llvm.bswap.i32");
-
-            inlined.insert("llvm.stacksave");
-            inlined.insert("llvm.stackrestore");
-            inlined.insert("llvm.trap");
-
-            inlined.insert("llvm.uadd.with.overflow.i64");
-            inlined.insert("llvm.umul.with.overflow.i64");
-
-            inlined.insert("llvm.eh.exception");
-            inlined.insert("llvm.eh.selector");
-
-            inlined.insert("llvm.lifetime.start");
-            inlined.insert("llvm.lifetime.end");
 
             // Memory intrinsics: support both typed-pointer and opaque-pointer spellings.
             // Prefer wrappers keyed by length type to avoid ABI pitfalls for small integer
@@ -138,15 +99,6 @@ namespace intrinsic_libcalls {
     }
 } // namespace intrinsic_libcalls
 } // namespace stabilizer
-
-inline void InitLibcalls() {
-    (void) stabilizer::intrinsic_libcalls::getTables();
-}
-
-inline bool isAlwaysInlined(llvm::StringRef intrinsic) {
-    const auto& tables = stabilizer::intrinsic_libcalls::getTables();
-    return tables.always_inlined.contains(intrinsic);
-}
 
 inline llvm::StringRef GetLibcall(llvm::StringRef intrinsic) {
     const auto& tables = stabilizer::intrinsic_libcalls::getTables();
