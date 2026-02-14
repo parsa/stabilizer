@@ -15,7 +15,7 @@ enum {
     
     CodeShuffle = 256,
     CodeProt = PROT_READ | PROT_WRITE | PROT_EXEC,
-    CodeFlags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT,
+    CodeFlags = MAP_PRIVATE | MAP_ANONYMOUS,
     CodeSize = 0x2000000
 };
 

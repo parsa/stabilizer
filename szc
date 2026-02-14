@@ -258,11 +258,6 @@ def codegen(input):
 	# after moving code.
 	if args.platform == 'linux' and 'code' in args.R:
 		cmd += ' -Wl,--emit-relocs'
-		# Modern toolchains default to PIE, which places the main executable far
-		# from MAP_32BIT allocations. Stabilizer's code randomization relies on
-		# 32-bit PC-relative fixups; keep the binary non-PIE so those displacements
-		# remain representable after relocation.
-		cmd += ' -no-pie'
 
 	cmd += arg('o ', args.o)
 	cmd += arg('f', args.f)

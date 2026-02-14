@@ -10,6 +10,7 @@
 #include "FunctionLocation.h"
 #include "Debug.h"
 #include "Heap.h"
+#include "CodeWindow.h"
 #include "Context.h"
 #include "TextRelocations.h"
 
@@ -60,6 +61,50 @@ int main(int argc, char **argv) {
     setHandler(SIGALRM, onTimer);
     setHandler(SIGSEGV, onFault);
     DEBUG("Signal handlers installed");
+
+    // If code randomization is enabled, we must ensure relocated code stays
+    // within range of x86_64 pc-relative relocations (signed 32-bit).
+    if(!functions.empty()) {
+        uintptr_t min_addr = (uintptr_t)-1;
+        uintptr_t max_addr = 0;
+
+        for(Function* f : functions) {
+            uintptr_t base = (uintptr_t)f->getCodeBase();
+            uintptr_t end = base + (uintptr_t)f->getCodeSize();
+
+            if(base < min_addr) {
+                min_addr = base;
+            }
+            if(end > max_addr) {
+                max_addr = end;
+            }
+        }
+
+        const uintptr_t ONE_GB = (uintptr_t)1 << 30;
+        const uintptr_t TWO_GB = (uintptr_t)1 << 31;
+
+        // If the randomized text span itself exceeds the pc-relative reach,
+        // we cannot safely relocate without more invasive rewriting.
+        if(max_addr < min_addr || (max_addr - min_addr) >= TWO_GB) {
+            ABORT("Executable text span too large for 32-bit pc-relative relocation. Disable -Rcode or use a non-PIE build.");
+        }
+
+        uintptr_t span = max_addr - min_addr;
+        uintptr_t center = min_addr + span / 2;
+
+        uintptr_t lo = (center > ONE_GB) ? (center - ONE_GB) : 0;
+        uintptr_t hi = (center > (uintptr_t)-1 - ONE_GB) ? (uintptr_t)-1 : (center + ONE_GB);
+
+        // Align to pages.
+        uintptr_t mask = ~((uintptr_t)PAGESIZE - 1u);
+        lo &= mask;
+        hi &= mask;
+
+        if(hi > lo) {
+            stabilizer_set_code_window(lo, hi);
+            DEBUG("Code allocation window: [%p, %p)", (void*)lo, (void*)hi);
+        }
+    }
 
     // Pre-compute relocation fixups for randomized code.
     // Code randomization requires ELF text relocations (link with --emit-relocs).
