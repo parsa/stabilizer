@@ -52,7 +52,7 @@ struct StabilizerImpl {
      * \returns A Platform value
      */
     Platform getPlatform(Module& m) {
-        string triple = m.getTargetTriple();
+        string triple = m.getTargetTriple().str();
 
         // Convert the target-triple to lowercase
         transform(triple.begin(), triple.end(), triple.begin(), ::tolower);

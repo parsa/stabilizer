@@ -19,31 +19,31 @@ using namespace llvm;
 
 bool lowerInstrinsicsPass(Module &m)
 {
-    InitLibcalls();
-
     std::set<Function*> toDelete;
 
     for(llvm::Function &f : m) {
-        if(f.isIntrinsic() && !isAlwaysInlined(f.getName())) {
-            StringRef r = GetLibcall(f.getName());
-
-            if(!r.empty()) {
-                Function *f_extern = m.getFunction(r);
-                if(!f_extern) {
-                    f_extern = Function::Create(
-                        f.getFunctionType(),
-                        Function::ExternalLinkage,
-                        r,
-                        &m
-                    );
-                }
-                f.replaceAllUsesWith(f_extern);
-                toDelete.insert(&f);
-
-            } else {
-                errs()<<"warning: unable to handle intrinsic "<<f.getName().str()<<"\n";
-            }
+        if(!f.isIntrinsic()) {
+            continue;
         }
+
+        StringRef r = GetLibcall(f.getName());
+        if(r.empty()) {
+            // Most intrinsics are expected to be lowered by LLVM codegen.
+            // We only rewrite the intrinsics we explicitly map to libcalls.
+            continue;
+        }
+
+        Function *f_extern = m.getFunction(r);
+        if(!f_extern) {
+            f_extern = Function::Create(
+                f.getFunctionType(),
+                Function::ExternalLinkage,
+                r,
+                &m
+            );
+        }
+        f.replaceAllUsesWith(f_extern);
+        toDelete.insert(&f);
     }
 
     for(Function* iter : toDelete) {

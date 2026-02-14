@@ -43,23 +43,17 @@ See also this [nice blog post](https://fgiesen.wordpress.com/2017/09/02/papers-i
 
 ### Building Requirements
 
-_NOTE: This project is no longer being actively maintained, and only works on quite old versions of LLVM._
+_NOTE: This project was originally built for LLVM 3.x. This repository has been updated to work with modern LLVM toolchains._
 
-Stabilizer requires [LLVM 3.1](http://llvm.org/releases/download.html#3.1). 
-Stabilizer runs on OSX and Linux, and supports x86, x86_64, and PowerPC.
+Stabilizer requires LLVM (tested with LLVM 21), and uses the LLVM toolchain
+(`clang`, `opt`, `llvm-link`, `llc`, `llvm-as`). For Fortran inputs, Stabilizer
+uses LLVM Flang (`flang` / `flang-new`).
 
-Stabilizer requires LLVM 3.1. Follow the directions
-[here](http://clang.llvm.org/get_started.html) to build LLVM 3.1 and the Clang
-front-end. Stabilizer's build system assumes LLVM include files will be
-accessible through your default include path.
+The legacy GCC + DragonEgg (Dragonegg) frontend is no longer supported.
 
-By default, Stabilizer will use GCC and the 
-[Dragonegg](http://dragonegg.llvm.org/) plugin to produce LLVM IR. Fortran 
-programs can only be built with the GCC front end. Stabilizer is tested 
-against GCC version 4.6.2.
 
-Stabilizer's compiler driver `szc` is written in Python.  It uses the 
-`argparse` module, so a relatively modern version of Python (>=2.7) is required.
+Stabilizer's compiler driver `szc` is written in Python 3 and uses the
+`argparse` module.
 
 ### Building Stabilizer
 ```
@@ -82,8 +76,9 @@ $ szc -Rcode -Rstack -Rheap foo.c -o foo
 ```
 
 The `-R` flags enable randomizations, and may be used in any combination.
-Stabilizer uses GCC with the Dragonegg plugin as its default front-end. To
-use clang, pass `-frontend=clang` to `szc`.
+Stabilizer uses clang for C/C++ inputs, and flang for Fortran inputs (when
+invoked with `-lang=fortran`). The `-frontend` flag is kept for compatibility
+(`-frontend=gcc` is no longer supported).
 
 The resulting executable is linked against with `libstabilizer.so` (or `.dylib` 
 on OSX). Place this library somewhere in your system's dynamic library search

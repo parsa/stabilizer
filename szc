@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import os
 import stat
@@ -7,6 +7,7 @@ import sys
 import random
 import argparse
 import logging
+import shutil
 from distutils import util
 
 
@@ -84,15 +85,25 @@ parser.add_argument('input', nargs='+')
 # Do the parse
 args = parser.parse_args()
 
-
-# Complain that the GCC frontend is broken and we can't use it, then exit
-def gcc_implementation_broken():
-	print('GCC frontend is broken, please use clang')
+if args.frontend == 'gcc':
+	print('GCC/DragonEgg frontend is no longer supported. Use -frontend=clang (C/C++) or -lang=fortran (Flang).')
 	exit(1)
 
+def run(cmd):
+	if args.v:
+		print(cmd)
+	subprocess.check_call(cmd, shell=True)
 
-if args.frontend == 'gcc' or args.lang == 'fortran':
-	gcc_implementation_broken()
+def try_run(cmd):
+	if args.v:
+		print(cmd)
+	return subprocess.call(cmd, shell=True) == 0
+
+def require_flang():
+	if not FLANG:
+		print('Fortran requested but flang was not found. Ensure `flang` (or `flang-new`) is in PATH.')
+		exit(1)
+	return FLANG
 
 
 def getPlatform():
@@ -129,6 +140,8 @@ if args.platform == 'osx':
 else:
 	LIBSUFFIX = 'so'
 
+FLANG = shutil.which('flang') or shutil.which('flang-new')
+
 opts = []
 passes = []
 stabilize_opts = []
@@ -158,43 +171,36 @@ def compile(input):
 	if input.endswith('.o'):
 		return input
 
-	needsAssembly = False
-
 	if args.lang == 'fortran':
-		cmd = 'gfortran -O0 -fplugin=dragonegg -S -fplugin-arg-dragonegg-emit-ir'
-		cmd += arg('o ', args.o + '.s')
-		needsAssembly = True
+		flang = require_flang()
+		common = arg('g', args.g) + arg('I', args.I) + arg('f', args.f) + arg('D', args.D)
+		out = arg('o ', args.o)
+		src = ' ' + input
 
-	elif args.frontend == 'gcc':
-		cmd = 'gcc -O0 -fplugin=dragonegg -S -fplugin-arg-dragonegg-emit-ir'
-		cmd += arg('o ', args.o + '.s')
-		needsAssembly = True
+		# Emit LLVM bitcode via flang. Try O0 first; fall back if needed.
+		for opt in ['0', '1']:
+			if try_run(flang + ' -O' + opt + ' -c -emit-llvm' + out + common + src):
+				return args.o
+
+		# Last resort: emit LLVM IR assembly and assemble it.
+		ll = args.o + '.ll'
+		run(flang + ' -O1 -S -emit-llvm' + arg('o ', ll) + common + src)
+		run('llvm-as -o ' + args.o + ' ' + ll)
 
 	else:
 		# Clang adds `optnone` at -O0, which prevents later `opt` passes
 		# (including `default<O*>` and lowering passes) from running. That
 		# breaks Stabilizer's assumptions (e.g., we rely on switch lowering to
 		# avoid jump tables). Disable that behavior.
-		cmd = 'clang -O0 -Xclang -disable-O0-optnone -c -emit-llvm'
+		cmd = args.frontend + ' -O0 -Xclang -disable-O0-optnone -c -emit-llvm'
 		cmd += arg('o ', args.o)
+		cmd += arg('g', args.g)
+		cmd += arg('I', args.I)
+		cmd += arg('f', args.f)
+		cmd += arg('D', args.D)
+		cmd += ' ' + input
 
-	cmd += arg('O', 0)
-	cmd += arg('g', args.g)
-	cmd += arg('I', args.I)
-	cmd += arg('f', args.f)
-	cmd += arg('D', args.D)
-
-	cmd += ' ' + input
-
-	if args.v:
-		print(cmd)
-	subprocess.check_call(cmd, shell=True)
-
-	if needsAssembly:
-		cmd = 'llvm-as -o ' + args.o + ' ' + args.o + '.s'
-		if args.v:
-			print(cmd)
-		subprocess.check_call(cmd, shell=True)
+		run(cmd)
 
 	return args.o
 
@@ -206,9 +212,7 @@ def link(inputs):
 
 	cmd += ' '.join(inputs)
 
-	if args.v:
-		print(cmd)
-	subprocess.check_call(cmd, shell=True)
+	run(cmd)
 	return args.o + '.bc'
 
 def transform(input):
@@ -229,9 +233,7 @@ def transform(input):
 
 	cmd += ' '.join([' -' + v + '=true' for v in stabilize_opts])
 
-	if args.v:
-		print(cmd)
-	subprocess.check_call(cmd, shell=True)
+	run(cmd)
 	return args.o + '.opt.bc'
 
 def codegen(input):
@@ -240,12 +242,13 @@ def codegen(input):
 	cmd += ' -o ' + args.o + '.s'
 	cmd += ' ' + input
 
-	if args.v:
-		print(cmd)
-	subprocess.check_call(cmd, shell=True)
+	run(cmd)
 
 	if args.lang == 'fortran':
-		cmd = 'gfortran'
+		flang = require_flang()
+		# The flang driver in some installations cannot use clang's integrated
+		# assembler (`-cc1as`). Force the external assembler for `.s` inputs.
+		cmd = flang + ' -no-integrated-as'
 	else:
 		cmd = args.frontend
 
@@ -255,15 +258,18 @@ def codegen(input):
 	# after moving code.
 	if args.platform == 'linux' and 'code' in args.R:
 		cmd += ' -Wl,--emit-relocs'
+		# Modern toolchains default to PIE, which places the main executable far
+		# from MAP_32BIT allocations. Stabilizer's code randomization relies on
+		# 32-bit PC-relative fixups; keep the binary non-PIE so those displacements
+		# remain representable after relocation.
+		cmd += ' -no-pie'
 
 	cmd += arg('o ', args.o)
 	cmd += arg('f', args.f)
 	cmd += arg('L', args.L)
 	cmd += arg('l', args.l)
 
-	if args.v:
-		print(cmd)
-	subprocess.check_call(cmd, shell=True)
+	run(cmd)
 
 	return args.o
 
