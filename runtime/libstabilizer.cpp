@@ -301,6 +301,7 @@ void setTimer(int msec) {
 
 void setHandler(int sig, void(*fn)(int, siginfo_t*, void*)) {
     struct sigaction sa;
+    sigemptyset(&sa.sa_mask);
     sa.sa_sigaction = (void(*)(int, siginfo_t*, void*))fn;
     sa.sa_flags = SA_SIGINFO;
     sigaction(sig, &sa, NULL);
